@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+*.log
+*.tsbuildinfo
+.DS_Store
+.playwright-cli/
+output/
+apps/web/data/geoip/
+apps/web/data/mihomo/
+**/data/geoip/
+**/data/mihomo/

@@ -1,0 +1,34 @@
+{
+  "name": "@subconvert/web",
+  "version": "1.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 3010",
+    "build": "next build",
+    "start": "next start -H 127.0.0.1 -p 3010",
+    "lint": "eslint app src --max-warnings=0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@subboost/core": "*",
+    "@subboost/server-core": "*",
+    "js-yaml": "^4.3.1",
+    "lucide-react": "^0.468.0",
+    "next": "^16.2.12",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "undici": "^8.10.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.19.19",
+    "@types/react": "^19.2.16",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.12",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "subconvert-lite",
+  "version": "1.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22.13.0 <23 || >=24.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm --workspace @subconvert/web run dev",
+    "build": "npm --workspace @subconvert/web run build",
+    "lint": "npm --workspace @subconvert/web run lint",
+    "typecheck": "npm --workspace @subconvert/web run typecheck",
+    "test": "npm run typecheck && npm run build"
+  }
+}
