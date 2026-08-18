@@ -32,6 +32,7 @@ export type TcpProbeResult = {
 export type ProxyProbeResult = {
   status: "available" | "unavailable" | "unsupported" | "core-unavailable";
   latencyMs?: number;
+  downloadCurrentMbps?: number;
   downloadSpeedMbps?: number;
   downloadSampleBytes?: number;
   downloadTransferredBytes?: number;
@@ -56,6 +57,19 @@ export type NodeTestResult = {
   proxy: ProxyProbeResult;
   testedAt: string;
 };
+
+export type NodeTestProgress = {
+  type: "progress";
+  mode: "speed";
+  key: string;
+  proxy: Pick<ProxyProbeResult, "status" | "downloadCurrentMbps" | "downloadPeakMbps" | "downloadSampleBytes" | "downloadTransferredBytes" | "downloadDurationSeconds">;
+  testedAt: string;
+};
+
+export type NodeTestStreamMessage =
+  | NodeTestProgress
+  | ({ type: "complete" } & Extract<NodeTestApiResponse, { ok: true }>)
+  | { type: "error"; error: string };
 
 export type NodeTestApiResponse =
   | { ok: true; mode: NodeTestMode; results: NodeTestResult[]; coreVersion?: string }

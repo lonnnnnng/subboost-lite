@@ -32,7 +32,7 @@ import { generateClashConfig, generateClashYaml } from "@subboost/core/generator
 import { PROXY_GROUP_MODULES } from "@subboost/core/generator/proxy-groups";
 import { parseBase64, parseSubscription } from "@subboost/core/parser";
 import { RULE_PROVIDER_SOURCES } from "@subboost/core/rules/metadata";
-import type { BuiltinRuleEdits, ClashConfig, TemplateType } from "@subboost/core/types/config";
+import type { BuiltinRuleEdits, ClashConfig, InternalDomainRule, TemplateType } from "@subboost/core/types/config";
 import type { NodeWithMeta, ParsedNode } from "@subboost/core/types/node";
 import { YamlHighlight } from "@/components/yaml-highlight";
 import {
@@ -50,7 +50,7 @@ import {
   safeFileName,
 } from "@/lib/lite-template";
 import { buildRegionNodeNames, countryCodeToRegion, detectNodeRegion } from "@/lib/node-region";
-import { MAX_SPEED_TEST_NODES, type NodeTestApiResponse, type NodeTestMode, type NodeTestResult, type SpeedTestSource } from "@/lib/node-test/types";
+import { MAX_SPEED_TEST_NODES, type NodeTestApiResponse, type NodeTestMode, type NodeTestProgress, type NodeTestResult, type NodeTestStreamMessage, type SpeedTestSource } from "@/lib/node-test/types";
 
 type SourceKind = "url" | "yaml" | "nodes";
 type PreviewTab = "visual" | "yaml";
@@ -143,6 +143,7 @@ function buildOutput(nodes: ParsedNode[], template: LiteTemplate) {
       testInterval: template.testInterval,
       ruleProviderBaseUrl: template.ruleProviderBaseUrl,
       experimentalCnUseCnRuleSet: template.experimentalCnUseCnRuleSet,
+      internalDomains: template.internalDomains,
       ...(template.baseConfigYaml.trim() ? { dnsYaml: template.baseConfigYaml } : {}),
     };
     const builtinRuleEdits: BuiltinRuleEdits = template.aiRuleMode === "split"
@@ -244,11 +245,21 @@ function formatLatency(meta: NodeWithMeta["_meta"]): string {
   return "—";
 }
 
-function formatSpeed(meta: NodeWithMeta["_meta"]): string {
+function formatSpeed(meta: NodeWithMeta["_meta"], testing = false): string {
+  if (testing && !Number.isFinite(meta?.downloadCurrentMbps) && !Number.isFinite(meta?.downloadPeakMbps)) return "准备中";
   if (meta?.speedTestStatus === "unavailable" || meta?.speedTestStatus === "core-unavailable") return "测试失败";
-  return typeof meta?.downloadSpeedMbps === "number" && Number.isFinite(meta.downloadSpeedMbps)
-    ? `${meta.downloadSpeedMbps.toFixed(1)} Mbps`
-    : "—";
+  const current = typeof meta?.downloadCurrentMbps === "number" && Number.isFinite(meta.downloadCurrentMbps)
+    ? meta.downloadCurrentMbps.toFixed(1)
+    : null;
+  const peak = typeof meta?.downloadPeakMbps === "number" && Number.isFinite(meta.downloadPeakMbps)
+    ? meta.downloadPeakMbps.toFixed(1)
+    : null;
+  const average = typeof meta?.downloadSpeedMbps === "number" && Number.isFinite(meta.downloadSpeedMbps)
+    ? meta.downloadSpeedMbps.toFixed(1)
+    : null;
+  if (testing && (current || peak)) return `当前 ${current ?? "—"} · 峰值 ${peak ?? "—"} Mbps`;
+  if (average || peak) return `平均 ${average ?? "—"} · 峰值 ${peak ?? "—"} Mbps`;
+  return "—";
 }
 
 function formatSpeedDetails(meta: NodeWithMeta["_meta"]): string | undefined {
@@ -257,7 +268,7 @@ function formatSpeedDetails(meta: NodeWithMeta["_meta"]): string | undefined {
     meta.downloadSource ? `来源 ${meta.downloadSource}` : "",
     typeof meta.downloadDurationSeconds === "number" ? `稳态 ${meta.downloadDurationSeconds.toFixed(1)} 秒` : "",
     typeof meta.downloadSampleBytes === "number" ? `样本 ${(meta.downloadSampleBytes / 1_000_000).toFixed(1)} MB` : "",
-    typeof meta.downloadPeakMbps === "number" ? `P90 ${meta.downloadPeakMbps.toFixed(1)} Mbps` : "",
+    typeof meta.downloadPeakMbps === "number" ? `峰值 ${meta.downloadPeakMbps.toFixed(1)} Mbps` : "",
     typeof meta.downloadStabilityPercent === "number" ? `稳定度 ${meta.downloadStabilityPercent.toFixed(1)}%` : "",
     meta.downloadFailedStreams ? `失败流 ${meta.downloadFailedStreams}` : "",
     meta.downloadStopReason === "data-limit" ? "达到采样上限" : meta.downloadStopReason === "stream-error" ? "存在失败流" : "按时长结束",
@@ -344,7 +355,7 @@ export function Workbench() {
   const [testingMode, setTestingMode] = useState<NodeTestMode | null>(null);
   const [connectivityTimeoutSeconds, setConnectivityTimeoutSeconds] = useState(3.5);
   const [speedTestDurationSeconds, setSpeedTestDurationSeconds] = useState(15);
-  const [speedTestConcurrency, setSpeedTestConcurrency] = useState(4);
+  const [speedTestConcurrency, setSpeedTestConcurrency] = useState(10);
   const [speedTestSource, setSpeedTestSource] = useState<SpeedTestSource>("cloudflare");
   const [speedTestCustomUrl, setSpeedTestCustomUrl] = useState("");
   const [speedTestMaxDataMb, setSpeedTestMaxDataMb] = useState(300);
@@ -401,7 +412,8 @@ export function Workbench() {
   const ruleCount = PROXY_GROUP_MODULES
     .filter((module) => template.enabledModules.includes(module.id))
     .reduce((total, module) => total + module.rules.length, 0) +
-    (template.adRuleMode === "enhanced" && template.enabledModules.includes("ad") ? 1 : 0);
+    (template.adRuleMode === "enhanced" && template.enabledModules.includes("ad") ? 1 : 0) +
+    template.internalDomains.length;
   const categories = [...new Set(PROXY_GROUP_MODULES.map((module) => module.category))];
   const providerSourceId = getProviderSourceId(template.ruleProviderBaseUrl);
   const decodedReviewContent = useMemo(
@@ -542,6 +554,7 @@ export function Workbench() {
           } : {
             ...meta,
             ...egressMeta,
+            downloadCurrentMbps: undefined,
             downloadSpeedMbps: result.proxy.downloadSpeedMbps,
             downloadSampleBytes: result.proxy.downloadSampleBytes,
             downloadTransferredBytes: result.proxy.downloadTransferredBytes,
@@ -562,6 +575,65 @@ export function Workbench() {
     }));
   }
 
+  function applyNodeTestProgress(progress: NodeTestProgress) {
+    const [sourceId, rawIndex] = progress.key.split(":");
+    const nodeIndex = Number(rawIndex);
+    if (!sourceId || !Number.isInteger(nodeIndex)) return;
+    setSources((current) => current.map((source) => source.id !== sourceId ? source : {
+      ...source,
+      nodes: source.nodes.map((node, index) => {
+        if (index !== nodeIndex) return node;
+        const meta = (node as NodeWithMeta)._meta;
+        return {
+          ...node,
+          _meta: {
+            ...meta,
+            downloadCurrentMbps: progress.proxy.downloadCurrentMbps,
+            downloadPeakMbps: progress.proxy.downloadPeakMbps,
+            downloadSampleBytes: progress.proxy.downloadSampleBytes,
+            downloadTransferredBytes: progress.proxy.downloadTransferredBytes,
+            downloadDurationSeconds: progress.proxy.downloadDurationSeconds,
+            speedTestStatus: "available",
+            testedAt: progress.testedAt,
+          },
+        };
+      }),
+    }));
+  }
+
+  async function readNodeTestResponse(response: Response, mode: NodeTestMode): Promise<NodeTestApiResponse> {
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/x-ndjson") || !response.body) {
+      return await response.json() as NodeTestApiResponse;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let completed: Extract<NodeTestApiResponse, { ok: true }> | null = null;
+    const handleLine = (line: string) => {
+      if (!line.trim()) return;
+      const message = JSON.parse(line) as NodeTestStreamMessage;
+      if (message.type === "progress") {
+        if (message.mode === mode) applyNodeTestProgress(message);
+        return;
+      }
+      if (message.type === "error") throw new Error(message.error);
+      if (message.type === "complete") completed = message;
+    };
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      lines.forEach(handleLine);
+      if (chunk.done) break;
+    }
+    if (buffer.trim()) handleLine(buffer);
+    if (!completed) throw new Error("节点测试未返回最终结果");
+    return completed;
+  }
+
   async function testRows(rows: NodeRow[], mode: NodeTestMode) {
     if (rows.length === 0) {
       showNotice("error", "请先选择节点");
@@ -573,6 +645,23 @@ export function Workbench() {
       return;
     }
     const keys = rows.map((row) => nodeKey(row.sourceId, row.nodeIndex));
+    if (mode === "speed") {
+      const keySet = new Set(keys);
+      // long: 新一轮测速开始前清空上次瞬时值，预热阶段不能把旧峰值误当成当前结果。
+      setSources((current) => current.map((source) => ({
+        ...source,
+        nodes: source.nodes.map((node, index) => keySet.has(nodeKey(source.id, index)) ? {
+          ...node,
+          _meta: {
+            ...(node as NodeWithMeta)._meta,
+            downloadCurrentMbps: undefined,
+            downloadPeakMbps: undefined,
+            speedTestStatus: undefined,
+            speedTestError: undefined,
+          },
+        } : node),
+      })));
+    }
     setTestingMode(mode);
     setTestingNodeKeys((current) => new Set([...current, ...keys]));
     try {
@@ -591,7 +680,7 @@ export function Workbench() {
           tcpTimeoutSeconds: connectivityTimeoutSeconds,
         }),
       });
-      const result = await response.json() as NodeTestApiResponse;
+      const result = await readNodeTestResponse(response, mode);
       if (!result.ok) throw new Error(result.error);
       result.results.forEach((item) => applyNodeTestResult(item, result.mode));
       const availableCount = result.results.filter((item) => item.proxy.status === "available").length;
@@ -796,6 +885,27 @@ export function Workbench() {
 
   function applyBuiltin(type: TemplateType) {
     setTemplate(createBuiltinTemplate(type));
+  }
+
+  function addInternalDomain() {
+    setTemplate((current) => ({
+      ...current,
+      internalDomains: [...current.internalDomains, { domain: "", nameservers: [] }],
+    }));
+  }
+
+  function updateInternalDomain(index: number, patch: Partial<InternalDomainRule>) {
+    setTemplate((current) => ({
+      ...current,
+      internalDomains: current.internalDomains.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
+    }));
+  }
+
+  function removeInternalDomain(index: number) {
+    setTemplate((current) => ({
+      ...current,
+      internalDomains: current.internalDomains.filter((_, itemIndex) => itemIndex !== index),
+    }));
   }
 
   function toggleModule(id: string) {
@@ -1025,6 +1135,40 @@ export function Workbench() {
                 <label><span>Mixed 端口</span><input className="form-control" type="number" min="1" max="65535" value={template.mixedPort} onChange={(event) => setTemplate((current) => ({ ...current, mixedPort: Number(event.target.value) }))} /></label>
                 <label className="switch-field"><span>允许局域网</span><input type="checkbox" checked={template.allowLan} onChange={(event) => setTemplate((current) => ({ ...current, allowLan: event.target.checked }))} /><i /></label>
               </div>
+              <div className="internal-domain-settings">
+                <div className="internal-domain-heading">
+                  <div>
+                    <span className="field-label">内网域名直连</span>
+                    <small>生成 Fake-IP 过滤、指定 DNS 和 DOMAIN-SUFFIX 直连规则</small>
+                  </div>
+                  <button className="secondary-button compact-button" type="button" onClick={addInternalDomain}><Plus size={14} />添加域名</button>
+                </div>
+                {template.internalDomains.length === 0 ? (
+                  <div className="internal-domain-empty">暂无内网域名，留空不改变默认 DNS 行为。</div>
+                ) : (
+                  <div className="internal-domain-list">
+                    {template.internalDomains.map((item, index) => (
+                      <div className="internal-domain-row" key={`internal-domain-${index}`}>
+                        <input
+                          className="form-control"
+                          value={item.domain}
+                          onChange={(event) => updateInternalDomain(index, { domain: event.target.value })}
+                          placeholder="例如 intranet.example.com"
+                          aria-label={`内网域名 ${index + 1}`}
+                        />
+                        <input
+                          className="form-control"
+                          value={item.nameservers.join(", ")}
+                          onChange={(event) => updateInternalDomain(index, { nameservers: event.target.value.split(/[\\s,;，；]+/).map((entry) => entry.trim()).filter(Boolean) })}
+                          placeholder="DNS 地址，逗号分隔"
+                          aria-label={`内网域名 ${index + 1} 的 DNS 地址`}
+                        />
+                        <button className="icon-button compact" type="button" title="删除内网域名" onClick={() => removeInternalDomain(index)}><Trash2 size={14} /></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <label className="field-label" htmlFor="base-yaml">基础和 DNS YAML 覆盖</label>
               <textarea id="base-yaml" className="base-yaml" spellCheck={false} value={template.baseConfigYaml} onChange={(event) => setTemplate((current) => ({ ...current, baseConfigYaml: event.target.value }))} placeholder="留空使用内置安全配置" />
             </div>
@@ -1084,11 +1228,11 @@ export function Workbench() {
                         }} />
                         <span>秒</span>
                       </label>
-                      <label className="node-test-duration" title="并行下载连接数，范围 1-20；总采样量不会随并发数增加">
+                      <label className="node-test-duration" title="并行下载连接数，范围 1-100；总采样量不会随并发数增加">
                         <span>并发</span>
-                        <input type="number" min={1} max={20} step={1} value={speedTestConcurrency} aria-label="测速并发数" onChange={(event) => {
+                        <input type="number" min={1} max={100} step={1} value={speedTestConcurrency} aria-label="测速并发数" onChange={(event) => {
                           const next = Number(event.target.value);
-                          if (Number.isFinite(next)) setSpeedTestConcurrency(Math.min(20, Math.max(1, Math.round(next))));
+                          if (Number.isFinite(next)) setSpeedTestConcurrency(Math.min(100, Math.max(1, Math.round(next))));
                         }} />
                       </label>
                       <label className="node-test-duration" title="测速采样上限，达到后提前结束；按稳态样本计算结果">
@@ -1156,7 +1300,7 @@ export function Workbench() {
                             <span className="node-type">{row.node.type}</span>
                             <span className={`node-test-status node-test-${connectivity.tone}`} title={meta?.latencyTestError || meta?.testError || undefined}><i />{isLatencyTesting ? "测试中" : connectivity.label}</span>
                             <span className="node-test-value" title={meta?.latencyTestError || (meta?.tcpLatency ? `裸 TCP 建连延迟 ${meta.tcpLatency} ms` : undefined)}>{isLatencyTesting ? "…" : formatLatency(meta)}</span>
-                            <span className="node-test-value" title={formatSpeedDetails(meta)}>{isSpeedTesting ? "…" : formatSpeed(meta)}</span>
+                            <span className="node-test-value" title={formatSpeedDetails(meta)}>{formatSpeed(meta, isSpeedTesting)}</span>
                             <span className="node-endpoint" title={`${String(row.node.server ?? "-")}:${String(row.node.port ?? "-")}`}>{String(row.node.server ?? "-")}:{String(row.node.port ?? "-")}</span>
                             <span className="node-source" title={row.sourceName}>{row.sourceName}</span>
                             <div className="node-row-actions">

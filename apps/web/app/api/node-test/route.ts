@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isNodeTestRequestItem, testNodeBatch } from "@/lib/node-test/server";
-import { MAX_SPEED_TEST_NODES, type NodeTestApiResponse, type NodeTestMode, type NodeTestRequest, type SpeedTestSource } from "@/lib/node-test/types";
+import { MAX_SPEED_TEST_NODES, type NodeTestApiResponse, type NodeTestMode, type NodeTestRequest, type NodeTestStreamMessage, type SpeedTestSource } from "@/lib/node-test/types";
 
 export const runtime = "nodejs";
 
@@ -66,9 +66,9 @@ export async function POST(request: Request) {
     speedConcurrency === undefined ||
     !Number.isInteger(speedConcurrency) ||
     Number(speedConcurrency) < 1 ||
-    Number(speedConcurrency) > 20
+    Number(speedConcurrency) > 100
   )) {
-    return json({ ok: false, error: "测速并发数必须是 1-20 的整数" }, 400);
+    return json({ ok: false, error: "测速并发数必须是 1-100 的整数" }, 400);
   }
   const speedSource = (body as { speedSource?: unknown })?.speedSource;
   if (mode === "speed" && speedSource !== "cloudflare" && speedSource !== "github" && speedSource !== "custom") {
@@ -107,17 +107,60 @@ export async function POST(request: Request) {
     const request = body as NodeTestRequest;
     // long: API 以秒接收便于页面编辑，进入 socket 层前统一转换为整数毫秒，避免不同调用方解释不一致。
     const tcpTimeoutMs = Math.round(Number(tcpTimeoutSeconds ?? 3.5) * 1000);
-    const result = await testNodeBatch(request.nodes, mode as NodeTestMode, {
-      tcpTimeoutMs,
-      ...(mode === "speed" ? {
-        durationMs: Number(durationSeconds) * 1000,
-        concurrency: Number(speedConcurrency),
-        source: speedSource as SpeedTestSource,
-        url: typeof speedUrl === "string" ? speedUrl : undefined,
-        maxDataBytes: Number(speedMaxDataMb) * 1_000_000,
-      } : {}),
+    if (mode === "latency") {
+      const result = await testNodeBatch(request.nodes, "latency", { tcpTimeoutMs });
+      return json({ ok: true, mode: "latency", ...result });
+    }
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const write = (message: NodeTestStreamMessage) => controller.enqueue(encoder.encode(`${JSON.stringify(message)}\n`));
+        void (async () => {
+          try {
+            const result = await testNodeBatch(request.nodes, mode as NodeTestMode, {
+              tcpTimeoutMs,
+              onProgress: (progress) => {
+                if (mode !== "speed" || !progress.key) return;
+                write({
+                  type: "progress",
+                  mode: "speed",
+                  key: progress.key,
+                  testedAt: new Date().toISOString(),
+                  proxy: {
+                    status: "available",
+                    downloadCurrentMbps: progress.currentMbps,
+                    downloadPeakMbps: progress.peakMbps,
+                    downloadSampleBytes: progress.sampleBytes,
+                    downloadTransferredBytes: progress.transferredBytes,
+                    downloadDurationSeconds: progress.durationSeconds,
+                  },
+                });
+              },
+              ...(mode === "speed" ? {
+                durationMs: Number(durationSeconds) * 1000,
+                concurrency: Number(speedConcurrency),
+                source: speedSource as SpeedTestSource,
+                url: typeof speedUrl === "string" ? speedUrl : undefined,
+                maxDataBytes: Number(speedMaxDataMb) * 1_000_000,
+              } : {}),
+            });
+            write({ type: "complete", ok: true, mode: mode as NodeTestMode, ...result });
+            controller.close();
+          } catch (error) {
+            write({ type: "error", error: error instanceof Error ? error.message : "节点测试失败" });
+            controller.close();
+          }
+        })();
+      },
     });
-    return json({ ok: true, mode: mode as NodeTestMode, ...result });
+    return new Response(stream, {
+      headers: {
+        "Cache-Control": "no-store, no-transform",
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "节点测试失败";
     return json({ ok: false, error: message }, 500);

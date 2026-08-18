@@ -16,6 +16,7 @@ export const DEFAULT_SUBBOOST_CONFIG = {
   // long: 完整模板才加载 geosite/cn.mrs，轻量和日常模板避免重复下载国内域名库。
   experimentalCnUseCnRuleSet: false,
   dnsYaml: "",
+  internalDomains: [],
   mixedPort: 7897,
   allowLan: true,
 } as const satisfies Omit<UserConfig, "enabledGroups" | "enabledRules">;
@@ -34,6 +35,7 @@ export function buildDefaultUserConfig(template: TemplateType): UserConfig {
     cnIpNoResolve: DEFAULT_SUBBOOST_CONFIG.cnIpNoResolve,
     experimentalCnUseCnRuleSet: template === "full",
     dnsYaml: DEFAULT_SUBBOOST_CONFIG.dnsYaml,
+    internalDomains: [],
     mixedPort: DEFAULT_SUBBOOST_CONFIG.mixedPort,
     allowLan: DEFAULT_SUBBOOST_CONFIG.allowLan,
   };

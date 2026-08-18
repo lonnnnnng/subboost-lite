@@ -132,6 +132,14 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .advanced-settings[open] summary svg:last-child { transform: rotate(90deg); }
 .advanced-body { padding: 12px; border-top: 1px solid var(--line); background: #fafbf9; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.internal-domain-settings { margin: 4px 0 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.internal-domain-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+.internal-domain-heading .field-label { margin-bottom: 3px; color: var(--ink); }
+.internal-domain-heading small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.internal-domain-list { display: grid; gap: 7px; }
+.internal-domain-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 30px; gap: 7px; align-items: center; }
+.internal-domain-row .form-control { min-width: 0; height: 38px; font-size: 12px; }
+.internal-domain-empty { padding: 10px; border: 1px dashed var(--line-strong); color: var(--muted); font-size: 11px; line-height: 1.45; }
 .field-row label > span, .switch-field > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .switch-field { position: relative; }
 .switch-field input { position: absolute; opacity: 0; }
@@ -404,8 +412,8 @@ button:disabled { opacity: 0.42; }
 .node-test-duration input { border-color: var(--line); border-radius: 4px; background: white; color: var(--ink); }
 .node-test-duration input:focus { border-color: var(--green); box-shadow: 0 0 0 2px rgba(15, 128, 111, 0.1); }
 .node-list-table-scroll { background: white; }
-.node-list-table { min-width: 1200px; }
-.node-list-head, .node-list-row { grid-template-columns: 28px 34px minmax(160px, 1.35fr) 92px 68px 86px 74px 94px minmax(150px, 1fr) minmax(90px, 0.7fr) 104px; gap: 8px; }
+.node-list-table { min-width: 1280px; }
+.node-list-head, .node-list-row { grid-template-columns: 28px 34px minmax(160px, 1.35fr) 92px 68px 86px 74px 170px minmax(150px, 1fr) minmax(90px, 0.7fr) 104px; gap: 8px; }
 .node-list-head { min-height: 38px; padding: 0 16px; border-bottom-color: var(--line); background: #eaf1f4; color: #657982; }
 .node-list-row { min-height: 58px; padding: 8px 16px; border-bottom-color: #e5ecef; background: white; }
 .node-list-row:hover { background: #f5f9fa; }

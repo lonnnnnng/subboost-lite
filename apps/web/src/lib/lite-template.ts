@@ -2,7 +2,7 @@ import { DEFAULT_SUBBOOST_CONFIG } from "@subboost/core/config/defaults";
 import { PROXY_GROUP_MODULES } from "@subboost/core/generator/proxy-groups";
 import { DEFAULT_RULE_PROVIDER_BASE_URL } from "@subboost/core/rules/metadata";
 import { TEMPLATES } from "@subboost/core/templates";
-import type { TemplateType } from "@subboost/core/types/config";
+import type { InternalDomainRule, TemplateType } from "@subboost/core/types/config";
 
 export const LITE_TEMPLATE_SCHEMA = "subconvert-template/v1" as const;
 export const REQUIRED_MODULES = ["select", "final"] as const;
@@ -26,6 +26,7 @@ export type LiteTemplate = {
   experimentalCnUseCnRuleSet: boolean;
   aiRuleMode: AiRuleMode;
   adRuleMode: AdRuleMode;
+  internalDomains: InternalDomainRule[];
 };
 
 const BUILTIN_NAMES: Record<TemplateType, string> = {
@@ -51,6 +52,7 @@ export function createBuiltinTemplate(type: TemplateType): LiteTemplate {
     experimentalCnUseCnRuleSet: type === "full",
     aiRuleMode: type === "full" ? "aggregate" : "split",
     adRuleMode: "light",
+    internalDomains: [],
   };
 }
 
@@ -81,6 +83,14 @@ export function parseLiteTemplate(value: unknown): LiteTemplate {
   const testInterval = Number(value.testInterval);
   const aiRuleMode: AiRuleMode = value.aiRuleMode === "aggregate" ? "aggregate" : "split";
   const adRuleMode: AdRuleMode = value.adRuleMode === "enhanced" ? "enhanced" : "light";
+  const internalDomains: InternalDomainRule[] = Array.isArray(value.internalDomains)
+    ? value.internalDomains.flatMap((item): InternalDomainRule[] => {
+        if (!isRecord(item) || typeof item.domain !== "string" || !Array.isArray(item.nameservers)) return [];
+        const domain = item.domain.trim();
+        const nameservers = [...new Set(item.nameservers.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean))];
+        return domain && nameservers.length > 0 ? [{ domain, nameservers }] : [];
+      })
+    : [];
   const ruleProviderBaseUrl =
     typeof value.ruleProviderBaseUrl === "string" && /^https?:\/\//i.test(value.ruleProviderBaseUrl.trim())
       ? value.ruleProviderBaseUrl.trim().replace(/\/+$/, "")
@@ -103,6 +113,7 @@ export function parseLiteTemplate(value: unknown): LiteTemplate {
         : baseTemplate === "full",
     aiRuleMode,
     adRuleMode,
+    internalDomains,
   };
 }
 

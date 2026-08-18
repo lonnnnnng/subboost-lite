@@ -34,6 +34,32 @@ describe("generateClashConfig", () => {
     expect(config["proxy-groups"] ?? []).not.toHaveLength(0);
   });
 
+  it("merges internal domain DNS settings and places direct rules before generated rules", () => {
+    const config = generateClashConfig({
+      nodes: [ssNode()],
+      userConfig: {
+        dnsYaml: [
+          "dns:",
+          "  fake-ip-filter:",
+          "    - existing.example.com",
+          "  nameserver-policy:",
+          "    '+.existing.example.com': 1.1.1.1",
+        ].join("\\n"),
+        internalDomains: [
+          { domain: "*.Corp.Example.com", nameservers: ["10.0.0.53", "10.0.0.54"] },
+          { domain: "corp.example.com", nameservers: ["10.0.0.53"] },
+        ],
+      },
+    });
+
+    expect(config.dns?.["fake-ip-filter"]).toEqual(["existing.example.com", "corp.example.com", "*.corp.example.com"]);
+    expect(config.dns?.["nameserver-policy"]).toMatchObject({
+      "+.existing.example.com": "1.1.1.1",
+      "+.corp.example.com": ["10.0.0.53", "10.0.0.54"],
+    });
+    expect(config.rules?.[0]).toBe("DOMAIN-SUFFIX,corp.example.com,DIRECT");
+  });
+
   it("deduplicates proxy names and filters nodes unsupported by Mihomo", () => {
     const config = generateClashConfig({
       nodes: [

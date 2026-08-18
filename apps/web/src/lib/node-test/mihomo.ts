@@ -13,7 +13,7 @@ import {
 } from "@subboost/core/mihomo/proxy-sanitizer";
 import type { ParsedNode } from "@subboost/core/types/node";
 import type { NodeTestMode, ProxyProbeResult, SpeedTestSource } from "./types";
-import { calculateDownloadSpeedMbps, calculatePercentile, calculateStabilityPercent } from "./speed-math";
+import { calculateDownloadSpeedMbps, calculateStabilityPercent } from "./speed-math";
 import { requestEgressIpInfo } from "./egress-ip";
 import { buildSpeedTestTarget } from "./speed-target";
 
@@ -22,7 +22,7 @@ const BINARY_MAX_BYTES = 40 * 1024 * 1024;
 const DEFAULT_SPEED_TEST_MAX_DATA_BYTES = 300 * 1_000_000;
 const MIN_SPEED_SAMPLE_BYTES = 1_000_000;
 const DEFAULT_SPEED_TEST_DURATION_MS = 15_000;
-const DEFAULT_SPEED_TEST_CONCURRENCY = 4;
+const DEFAULT_SPEED_TEST_CONCURRENCY = 10;
 const DEFAULT_SPEED_TEST_SOURCE: SpeedTestSource = "cloudflare";
 const SPEED_TEST_CHUNK_BYTES = 8 * 1_000_000;
 const SPEED_TEST_WARMUP_MS = 1_500;
@@ -235,6 +235,16 @@ export type SpeedTestOptions = {
   source?: SpeedTestSource;
   url?: string;
   maxDataBytes?: number;
+  onProgress?: (progress: DownloadProgress) => void;
+};
+
+export type DownloadProgress = {
+  key?: string;
+  currentMbps: number;
+  peakMbps: number;
+  sampleBytes: number;
+  transferredBytes: number;
+  durationSeconds: number;
 };
 
 export type DownloadSpeedResult = {
@@ -253,7 +263,7 @@ export type DownloadSpeedResult = {
 
 async function requestDownloadSpeed(mixedPort: number, options: SpeedTestOptions = {}): Promise<DownloadSpeedResult> {
   const durationMs = Math.min(300_000, Math.max(15_000, Math.round(options.durationMs ?? DEFAULT_SPEED_TEST_DURATION_MS)));
-  const concurrency = Math.min(20, Math.max(1, Math.round(options.concurrency ?? DEFAULT_SPEED_TEST_CONCURRENCY)));
+  const concurrency = Math.min(100, Math.max(1, Math.round(options.concurrency ?? DEFAULT_SPEED_TEST_CONCURRENCY)));
   const source = options.source ?? DEFAULT_SPEED_TEST_SOURCE;
   const maxDataBytes = Math.max(MIN_SPEED_SAMPLE_BYTES, Math.round(options.maxDataBytes ?? DEFAULT_SPEED_TEST_MAX_DATA_BYTES));
   const dispatcher = new ProxyAgent(`http://127.0.0.1:${mixedPort}`);
@@ -265,6 +275,7 @@ async function requestDownloadSpeed(mixedPort: number, options: SpeedTestOptions
   let warmupCaptured = false;
   let stoppedByDataLimit = false;
   const intervalSamples: number[] = [];
+  let peakMbps = 0;
   let sampleBytesAt = 0;
   let sampleAt = 0;
   const sampleTimer = setInterval(() => {
@@ -278,7 +289,16 @@ async function requestDownloadSpeed(mixedPort: number, options: SpeedTestOptions
       return;
     }
     const seconds = Math.max(0.001, (now - sampleAt) / 1000);
-    intervalSamples.push(calculateDownloadSpeedMbps(totalBytes - sampleBytesAt, seconds));
+    const currentMbps = calculateDownloadSpeedMbps(totalBytes - sampleBytesAt, seconds);
+    intervalSamples.push(currentMbps);
+    peakMbps = Math.max(peakMbps, currentMbps);
+    options.onProgress?.({
+      currentMbps,
+      peakMbps,
+      sampleBytes: Math.max(0, totalBytes - warmupBytes),
+      transferredBytes: totalBytes,
+      durationSeconds: Math.max(0, (now - warmupEndsAt) / 1000),
+    });
     sampleBytesAt = totalBytes;
     sampleAt = now;
   }, SPEED_SAMPLE_INTERVAL_MS);
@@ -338,7 +358,16 @@ async function requestDownloadSpeed(mixedPort: number, options: SpeedTestOptions
       throw new Error("下载测速返回的数据量不足");
     }
     if (warmupCaptured && sampleAt > 0 && endedAt > sampleAt && totalBytes > sampleBytesAt) {
-      intervalSamples.push(calculateDownloadSpeedMbps(totalBytes - sampleBytesAt, (endedAt - sampleAt) / 1000));
+      const currentMbps = calculateDownloadSpeedMbps(totalBytes - sampleBytesAt, (endedAt - sampleAt) / 1000);
+      intervalSamples.push(currentMbps);
+      peakMbps = Math.max(peakMbps, currentMbps);
+      options.onProgress?.({
+        currentMbps,
+        peakMbps,
+        sampleBytes,
+        transferredBytes: totalBytes,
+        durationSeconds: sampleSeconds,
+      });
     }
     const stopReason = failedStreams > 0
       ? "stream-error"
@@ -348,7 +377,7 @@ async function requestDownloadSpeed(mixedPort: number, options: SpeedTestOptions
       sampleBytes,
       transferredBytes: totalBytes,
       complete: stopReason === "data-limit",
-      peakMbps: calculatePercentile(intervalSamples, 0.9),
+      peakMbps,
       stabilityPercent: calculateStabilityPercent(intervalSamples),
       durationSeconds: Math.round(sampleSeconds * 10) / 10,
       source,
@@ -447,7 +476,12 @@ export async function testNodesWithMihomo(
           const latencyMs = await requestDelay(baseUrl, secret, proxyName);
           results.set(item.key, { status: "available", latencyMs, ...egress });
         } else {
-          const download = await requestDownloadSpeed(mixedPort, speedOptions);
+          const download = await requestDownloadSpeed(mixedPort, {
+            ...speedOptions,
+            onProgress: (progress) => {
+              speedOptions.onProgress?.({ ...progress, key: item.key });
+            },
+          });
           results.set(item.key, {
             status: "available",
             ...egress,

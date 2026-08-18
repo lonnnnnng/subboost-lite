@@ -200,6 +200,8 @@ export interface UserConfig {
   
   // DNS 设置 (YAML 文本)
   dnsYaml: string;
+  // long: 结构化声明公司/家庭内网域名，生成器会同步写入 Fake-IP 过滤、域名 DNS 策略和直连规则。
+  internalDomains?: InternalDomainRule[];
   
   // 其他
   mixedPort: number;
@@ -207,6 +209,11 @@ export interface UserConfig {
 
   // 为指定节点生成 listeners（key=节点名，value=端口）
   listenerPorts?: Record<string, number>;
+}
+
+export interface InternalDomainRule {
+  domain: string;
+  nameservers: string[];
 }
 
 export interface CustomRule {

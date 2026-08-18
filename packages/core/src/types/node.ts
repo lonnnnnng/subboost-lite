@@ -396,6 +396,7 @@ export interface NodeMeta {
   tcpReachable?: boolean;
   tcpLatency?: number;
   downloadSpeedMbps?: number;
+  downloadCurrentMbps?: number;
   downloadSampleBytes?: number;
   downloadTransferredBytes?: number;
   downloadComplete?: boolean;

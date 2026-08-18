@@ -44,14 +44,42 @@ describe("node test API connectivity timeout", () => {
     const result = await POST(response);
 
     expect(result.status).toBe(200);
-    expect(mockedTestNodeBatch).toHaveBeenCalledWith(nodes, "speed", {
+    expect(mockedTestNodeBatch).toHaveBeenCalledWith(nodes, "speed", expect.objectContaining({
       tcpTimeoutMs: 3_500,
       durationMs: 30_000,
       concurrency: 10,
       source: "cloudflare",
       url: undefined,
       maxDataBytes: 300_000_000,
+      onProgress: expect.any(Function),
+    }));
+  });
+
+  it("streams speed progress before the final result", async () => {
+    mockedTestNodeBatch.mockImplementation(async (_items, _mode, options) => {
+      options?.onProgress?.({
+        key: "source:0",
+        currentMbps: 42.5,
+        peakMbps: 48.1,
+        sampleBytes: 5_000_000,
+        transferredBytes: 6_000_000,
+        durationSeconds: 1,
+      });
+      return { results: [], coreVersion: "test" };
     });
+
+    const response = await POST(new Request("http://127.0.0.1:3010/api/node-test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Host: "127.0.0.1:3010" },
+      body: JSON.stringify({ nodes, mode: "speed", durationSeconds: 15, speedConcurrency: 10, speedSource: "cloudflare", speedMaxDataMb: 300 }),
+    }));
+    const messages = (await response.text()).trim().split("\n").map((line) => JSON.parse(line) as { type: string; proxy?: { downloadCurrentMbps?: number }; coreVersion?: string });
+
+    expect(response.headers.get("content-type")).toContain("application/x-ndjson");
+    expect(messages).toEqual([
+      expect.objectContaining({ type: "progress", proxy: expect.objectContaining({ downloadCurrentMbps: 42.5 }) }),
+      expect.objectContaining({ type: "complete", coreVersion: "test" }),
+    ]);
   });
 
   it("allows latency tests with more than five nodes", async () => {
@@ -95,7 +123,7 @@ describe("node test API connectivity timeout", () => {
     expect(mockedTestNodeBatch).not.toHaveBeenCalled();
   });
 
-  it.each([0, 21, 1.5])("rejects invalid speed concurrency: %s", async (speedConcurrency) => {
+  it.each([0, 101, 1.5])("rejects invalid speed concurrency: %s", async (speedConcurrency) => {
     const response = new Request("http://127.0.0.1:3010/api/node-test", {
       method: "POST",
       headers: { "Content-Type": "application/json", Host: "127.0.0.1:3010" },
@@ -104,7 +132,7 @@ describe("node test API connectivity timeout", () => {
     const result = await POST(response);
 
     expect(result.status).toBe(400);
-    await expect(result.json()).resolves.toMatchObject({ ok: false, error: "测速并发数必须是 1-20 的整数" });
+    await expect(result.json()).resolves.toMatchObject({ ok: false, error: "测速并发数必须是 1-100 的整数" });
     expect(mockedTestNodeBatch).not.toHaveBeenCalled();
   });
 

@@ -24,10 +24,11 @@ export async function testNodeBatch(items: readonly NodeTestRequestItem[], mode:
   });
   const mihomo = await testNodesWithMihomo(mihomoItems, mode, {
     durationMs: (options.durationMs ?? 15_000),
-    concurrency: options.concurrency ?? 4,
+    concurrency: options.concurrency ?? 10,
     source: options.source,
     url: options.url,
     maxDataBytes: options.maxDataBytes,
+    onProgress: options.onProgress,
   });
   const testedAt = new Date().toISOString();
 
