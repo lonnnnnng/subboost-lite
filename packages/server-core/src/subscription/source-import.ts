@@ -276,22 +276,32 @@ export async function importSubscriptionFromUrl(
   const userAgents = options.userAgents?.length ? options.userAgents : SUBSCRIPTION_IMPORT_USER_AGENTS;
   let best: ParsedAttempt | null = null;
 
-  for (let index = 0; index < userAgents.length; index += 1) {
-    const userAgent = userAgents[index];
-    const attempt = await fetchAndParseWithUserAgent(url, userAgent, {
+  const fetchAttempt = (userAgent: string) => fetchAndParseWithUserAgent(url, userAgent, {
       timeoutMs,
       maxBytes,
       fetchText: options.fetchText,
-    });
+  });
+
+  // long: 前两个客户端协议请求彼此独立，先并行降低单条订阅在兼容性探测上的等待；浏览器 UA 只在前两次都不足以解析时补发。
+  const initialAttempts = await Promise.all(userAgents.slice(0, 2).map(fetchAttempt));
+  for (const attempt of initialAttempts) {
     best = pickBetterAttempt(best, attempt);
-    if (
-      !shouldContinueAfterCleanAttempt({
+  }
+
+  const bestNeedsFallback = best === null || shouldContinueAfterCleanAttempt({
+    attempt: best,
+    currentUserAgent: best.userAgent,
+    nextUserAgent: userAgents[2],
+  });
+  if (bestNeedsFallback) {
+    for (let index = 2; index < userAgents.length; index += 1) {
+      const attempt = await fetchAttempt(userAgents[index]);
+      best = pickBetterAttempt(best, attempt);
+      if (!shouldContinueAfterCleanAttempt({
         attempt,
-        currentUserAgent: userAgent,
+        currentUserAgent: userAgents[index],
         nextUserAgent: userAgents[index + 1],
-      })
-    ) {
-      break;
+      })) break;
     }
   }
 

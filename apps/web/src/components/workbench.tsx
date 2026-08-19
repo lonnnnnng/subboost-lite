@@ -653,6 +653,17 @@ export function Workbench() {
         if (message.mode === mode) applyNodeTestProgress(message);
         return;
       }
+      if (message.type === "result") {
+        if (message.mode === mode) {
+          applyNodeTestResult(message.result, message.mode);
+          setTestingNodeKeys((current) => {
+            const next = new Set(current);
+            next.delete(message.result.key);
+            return next;
+          });
+        }
+        return;
+      }
       if (message.type === "error") throw new Error(message.error);
       if (message.type === "complete") completed = message;
     };

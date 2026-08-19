@@ -21,6 +21,25 @@ function ssLink(name = "SS Node"): string {
 }
 
 describe("importSubscriptionFromUrl", () => {
+  it("并行尝试前两个客户端 User-Agent", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const fetchText = vi.fn(async (request: SourceImportTransportRequest): Promise<SourceImportTransportResult> => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      active -= 1;
+      return { ok: true, content: mihomoYaml, headers: { "content-type": "text/yaml" } };
+    });
+
+    const result = await importSubscriptionFromUrl({ url: "https://example.com/sub.yaml" }, { fetchText });
+
+    expect(result.ok).toBe(true);
+    expect(maxActive).toBe(2);
+    expect(fetchText).toHaveBeenCalledWith(expect.objectContaining({ userAgent: "v2rayN/7.20.4" }));
+    expect(fetchText).toHaveBeenCalledWith(expect.objectContaining({ userAgent: "mihomo/1.19.24" }));
+  });
+
   it("tries client user agents and keeps supplemental userinfo headers", async () => {
     const fetchText = vi.fn(async (request: SourceImportTransportRequest): Promise<SourceImportTransportResult> => {
       if (request.purpose === "userinfo") {

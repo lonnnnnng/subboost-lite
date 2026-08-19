@@ -66,8 +66,15 @@ export type NodeTestProgress = {
   testedAt: string;
 };
 
+export type NodeTestResultMessage = {
+  type: "result";
+  mode: NodeTestMode;
+  result: NodeTestResult;
+};
+
 export type NodeTestStreamMessage =
   | NodeTestProgress
+  | NodeTestResultMessage
   | ({ type: "complete" } & Extract<NodeTestApiResponse, { ok: true }>)
   | { type: "error"; error: string };
 

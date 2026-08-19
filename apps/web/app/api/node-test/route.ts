@@ -107,10 +107,6 @@ export async function POST(request: Request) {
     const request = body as NodeTestRequest;
     // long: API 以秒接收便于页面编辑，进入 socket 层前统一转换为整数毫秒，避免不同调用方解释不一致。
     const tcpTimeoutMs = Math.round(Number(tcpTimeoutSeconds ?? 3.5) * 1000);
-    if (mode === "latency") {
-      const result = await testNodeBatch(request.nodes, "latency", { tcpTimeoutMs });
-      return json({ ok: true, mode: "latency", ...result });
-    }
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -119,6 +115,8 @@ export async function POST(request: Request) {
           try {
             const result = await testNodeBatch(request.nodes, mode as NodeTestMode, {
               tcpTimeoutMs,
+              // long: 单个节点完成后立即写入流，前端不需要等待同批慢节点或超时节点结束。
+              onResult: (item) => write({ type: "result", mode: mode as NodeTestMode, result: item }),
               onProgress: (progress) => {
                 if (mode !== "speed" || !progress.key) return;
                 write({

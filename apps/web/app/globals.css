@@ -485,7 +485,6 @@ button:disabled { opacity: 0.42; }
 .source-input-meta { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .source-input-meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-input-meta strong { flex: 0 0 auto; color: var(--green-dark); font-size: 11px; font-variant-numeric: tabular-nums; }
-.source-panel > .panel-heading, .template-panel > .panel-heading { position: sticky; top: 0; z-index: 8; margin: -23px -23px 19px; padding: 6px 23px 14px; background: rgba(255, 255, 255, 0.97); box-shadow: 0 8px 12px -12px rgba(41, 68, 82, 0.7); }
 .source-panel, .template-panel, .node-list-table-scroll, .preview-content { scrollbar-width: thin; scrollbar-color: #b7c8cf transparent; }
 .source-panel::-webkit-scrollbar, .template-panel::-webkit-scrollbar, .node-list-table-scroll::-webkit-scrollbar, .preview-content::-webkit-scrollbar { width: 8px; height: 8px; }
 .source-panel::-webkit-scrollbar-thumb, .template-panel::-webkit-scrollbar-thumb, .node-list-table-scroll::-webkit-scrollbar-thumb, .preview-content::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 8px; background: #b7c8cf; background-clip: padding-box; }
@@ -493,9 +492,4 @@ button:disabled { opacity: 0.42; }
 
 @media (max-width: 1180px) and (min-width: 901px) {
   .preview-empty-actions { grid-template-columns: 1fr; max-width: 280px; }
-  .source-panel > .panel-heading, .template-panel > .panel-heading { margin: -18px -18px 18px; padding: 6px 18px 12px; }
-}
-
-@media (max-width: 900px) {
-  .source-panel > .panel-heading, .template-panel > .panel-heading { position: static; margin: 0 0 19px; padding: 0; }
 }

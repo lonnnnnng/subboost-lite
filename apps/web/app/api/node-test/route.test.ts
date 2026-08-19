@@ -32,7 +32,10 @@ describe("node test API connectivity timeout", () => {
     const response = await POST(request(12.5));
 
     expect(response.status).toBe(200);
-    expect(mockedTestNodeBatch).toHaveBeenCalledWith(nodes, "latency", { tcpTimeoutMs: 12_500 });
+    expect(mockedTestNodeBatch).toHaveBeenCalledWith(nodes, "latency", expect.objectContaining({
+      tcpTimeoutMs: 12_500,
+      onResult: expect.any(Function),
+    }));
   });
 
   it("passes speed mode and duration to the batch tester", async () => {
@@ -52,6 +55,7 @@ describe("node test API connectivity timeout", () => {
       url: undefined,
       maxDataBytes: 300_000_000,
       onProgress: expect.any(Function),
+      onResult: expect.any(Function),
     }));
   });
 
@@ -82,6 +86,27 @@ describe("node test API connectivity timeout", () => {
     ]);
   });
 
+  it("streams each completed latency result before the final summary", async () => {
+    mockedTestNodeBatch.mockImplementation(async (_items, _mode, options) => {
+      options?.onResult?.({
+        key: "source:0",
+        tcp: { status: "reachable", latencyMs: 12, pinnedServer: "203.0.113.1" },
+        proxy: { status: "available", latencyMs: 88 },
+        testedAt: "2026-08-19T00:00:00.000Z",
+      });
+      return { results: [], coreVersion: "test" };
+    });
+
+    const response = await POST(request(3.5));
+    const messages = (await response.text()).trim().split("\n").map((line) => JSON.parse(line) as { type: string; result?: { key?: string } });
+
+    expect(response.headers.get("content-type")).toContain("application/x-ndjson");
+    expect(messages).toEqual([
+      expect.objectContaining({ type: "result", result: expect.objectContaining({ key: "source:0" }) }),
+      expect.objectContaining({ type: "complete" }),
+    ]);
+  });
+
   it("allows latency tests with more than five nodes", async () => {
     const manyNodes = Array.from({ length: 6 }, (_, index) => ({
       key: `source:${index}`,
@@ -95,7 +120,10 @@ describe("node test API connectivity timeout", () => {
     const result = await POST(response);
 
     expect(result.status).toBe(200);
-    expect(mockedTestNodeBatch).toHaveBeenCalledWith(manyNodes, "latency", { tcpTimeoutMs: 3_500 });
+    expect(mockedTestNodeBatch).toHaveBeenCalledWith(manyNodes, "latency", expect.objectContaining({
+      tcpTimeoutMs: 3_500,
+      onResult: expect.any(Function),
+    }));
   });
 
   it("rejects speed tests with more than five nodes", async () => {

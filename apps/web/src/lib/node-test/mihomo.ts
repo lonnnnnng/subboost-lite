@@ -226,7 +226,16 @@ async function selectProxy(baseUrl: string, secret: string, groupName: string, p
     headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
     body: JSON.stringify({ name: proxyName }),
   });
-  if (!response.ok && response.status !== 204) throw new Error(`切换测速节点失败：HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`切换测速节点失败：HTTP ${response.status}`);
+
+  const verifyResponse = await fetch(`${baseUrl}/proxies/${encodeURIComponent(groupName)}`, {
+    headers: { Authorization: `Bearer ${secret}` },
+    cache: "no-store",
+  });
+  if (!verifyResponse.ok) throw new Error(`确认测速节点失败：HTTP ${verifyResponse.status}`);
+  const selected = await verifyResponse.json() as { now?: string };
+  // long: 只有控制器确认目标节点已经成为当前出口后才发起探测，避免异步切换期间把上一个节点的地区写入当前节点。
+  if (selected.now !== proxyName) throw new Error("测速节点切换未生效");
 }
 
 export type SpeedTestOptions = {
@@ -236,6 +245,10 @@ export type SpeedTestOptions = {
   url?: string;
   maxDataBytes?: number;
   onProgress?: (progress: DownloadProgress) => void;
+};
+
+export type MihomoTestOptions = SpeedTestOptions & {
+  onResult?: (key: string, result: ProxyProbeResult) => void;
 };
 
 export type DownloadProgress = {
@@ -415,12 +428,16 @@ async function egressProbeFields(mixedPort: number): Promise<Pick<ProxyProbeResu
 export async function testNodesWithMihomo(
   items: readonly MihomoTestItem[],
   mode: NodeTestMode,
-  speedOptions: SpeedTestOptions = {}
+  options: MihomoTestOptions = {}
 ): Promise<MihomoBatchResult> {
   const results = new Map<string, ProxyProbeResult>();
+  const setResult = (key: string, result: ProxyProbeResult) => {
+    results.set(key, result);
+    options.onResult?.(key, result);
+  };
   const supported = items.filter((item) => {
     if (isMihomoSupportedProxyNode(item.node)) return true;
-    results.set(item.key, { status: "unsupported", error: `Mihomo 不支持 ${String(item.node.type)} 节点` });
+    setResult(item.key, { status: "unsupported", error: `Mihomo 不支持 ${String(item.node.type)} 节点` });
     return false;
   });
   if (supported.length === 0) return { results };
@@ -430,7 +447,7 @@ export async function testNodesWithMihomo(
     binary = await ensureMihomoBinary();
   } catch (error) {
     const message = error instanceof Error ? error.message : "Mihomo 内核不可用";
-    for (const item of supported) results.set(item.key, { status: "core-unavailable", error: message });
+    for (const item of supported) setResult(item.key, { status: "core-unavailable", error: message });
     return { results };
   }
 
@@ -447,7 +464,8 @@ export async function testNodesWithMihomo(
     secret,
     "allow-lan": false,
     "bind-address": "127.0.0.1",
-    mode: "global",
+    // long: 规则模式确保 mixed-port 收到的所有探测请求都经过 SUBCONVERT_TEST；全局模式只服从内置 GLOBAL 组，会绕过下面的 MATCH 规则。
+    mode: "rule",
     "log-level": "silent",
     ipv6: true,
     "unified-delay": true,
@@ -471,18 +489,22 @@ export async function testNodesWithMihomo(
       try {
         // long: 出口查询必须先切换 select 组，否则多个节点会错误复用首个节点的实际出口。
         await selectProxy(baseUrl, secret, groupName, proxyName);
-        const egress = await egressProbeFields(mixedPort);
         if (mode === "latency") {
-          const latencyMs = await requestDelay(baseUrl, secret, proxyName);
-          results.set(item.key, { status: "available", latencyMs, ...egress });
+          // long: 地区识别和代理延迟都只读取当前选中的节点，可在切换下一节点前并行完成，避免两个网络等待时间串行累加。
+          const [egress, latencyMs] = await Promise.all([
+            egressProbeFields(mixedPort),
+            requestDelay(baseUrl, secret, proxyName),
+          ]);
+          setResult(item.key, { status: "available", latencyMs, ...egress });
         } else {
+          const egress = await egressProbeFields(mixedPort);
           const download = await requestDownloadSpeed(mixedPort, {
-            ...speedOptions,
+            ...options,
             onProgress: (progress) => {
-              speedOptions.onProgress?.({ ...progress, key: item.key });
+              options.onProgress?.({ ...progress, key: item.key });
             },
           });
-          results.set(item.key, {
+          setResult(item.key, {
             status: "available",
             ...egress,
             downloadSpeedMbps: download.speedMbps,
@@ -500,13 +522,13 @@ export async function testNodesWithMihomo(
           });
         }
       } catch (error) {
-        results.set(item.key, { status: "unavailable", error: publicProxyError(error) });
+        setResult(item.key, { status: "unavailable", error: publicProxyError(error) });
       }
     }
   } catch (error) {
     const message = publicProxyError(error);
     for (const item of supported) {
-      if (!results.has(item.key)) results.set(item.key, { status: "core-unavailable", error: message });
+      if (!results.has(item.key)) setResult(item.key, { status: "core-unavailable", error: message });
     }
   } finally {
     processHandle.kill("SIGTERM");
