@@ -12,6 +12,7 @@ import {
   Cloud,
   Code2,
   Download,
+  Eye,
   FileJson,
   FileUp,
   Gauge,
@@ -369,6 +370,7 @@ export function Workbench() {
   const [speedTestMaxDataMb, setSpeedTestMaxDataMb] = useState(300);
   const [pendingTlsReviews, setPendingTlsReviews] = useState<PendingTlsReview[]>([]);
   const pendingTlsReview = pendingTlsReviews[0] ?? null;
+  const [viewingNodeKey, setViewingNodeKey] = useState<string | null>(null);
   const [showDecodedReview, setShowDecodedReview] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const sourceInputRef = useRef<HTMLTextAreaElement>(null);
@@ -401,6 +403,17 @@ export function Workbench() {
     nodeIndex,
     node,
   }))), [sources]);
+  const viewingNodeIndex = viewingNodeKey ? nodeRows.findIndex((row) => nodeKey(row.sourceId, row.nodeIndex) === viewingNodeKey) : -1;
+  const viewingNodeRow = viewingNodeIndex >= 0 ? nodeRows[viewingNodeIndex] : null;
+
+  useEffect(() => {
+    if (!viewingNodeKey) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setViewingNodeKey(null);
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [viewingNodeKey]);
   const selectedRows = useMemo(
     () => nodeRows.filter((row) => selectedNodeKeys.has(nodeKey(row.sourceId, row.nodeIndex))),
     [nodeRows, selectedNodeKeys]
@@ -1380,6 +1393,7 @@ export function Workbench() {
                             <span className="node-endpoint" title={`${String(row.node.server ?? "-")}:${String(row.node.port ?? "-")}`}>{String(row.node.server ?? "-")}:{String(row.node.port ?? "-")}</span>
                             <span className="node-source" title={row.sourceName}>{row.sourceName}</span>
                             <div className="node-row-actions">
+                              <button className="icon-button compact" type="button" onClick={() => setViewingNodeKey(key)} title="查看节点详情" aria-label={`查看节点 ${index + 1} 全部信息`}><Eye size={14} /></button>
                               <button className="icon-button compact" type="button" onClick={() => void testRows([row], "latency")} disabled={testingNodeKeys.size > 0} title="测试连通性和延迟" aria-label={`测试节点 ${index + 1} 连通性和延迟`}><Activity size={14} /></button>
                               <button className="icon-button compact" type="button" onClick={() => void testRows([row], "speed")} disabled={testingNodeKeys.size > 0} title={`使用 ${speedTestConcurrency} 条并行流测试下载速度`} aria-label={`测试节点 ${index + 1} 下载速度`}><Gauge size={14} /></button>
                               <button className="icon-button compact danger-button" type="button" onClick={() => removeNodes(new Set([key]))} disabled={testingNodeKeys.size > 0} title="删除节点" aria-label={`删除节点 ${index + 1}`}><Trash2 size={14} /></button>
@@ -1412,6 +1426,34 @@ export function Workbench() {
           UPSTREAM SUBBOOST
         </a>
       </footer>
+
+      {viewingNodeRow ? (
+        <div
+          className="node-detail-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setViewingNodeKey(null);
+          }}
+        >
+          <section className="node-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="node-detail-title">
+            <div className="node-detail-heading">
+              <div>
+                <span className="step-index">NODE {String(viewingNodeIndex + 1).padStart(2, "0")}</span>
+                <h2 id="node-detail-title">{viewingNodeRow.node.name}</h2>
+              </div>
+              <button className="icon-button compact" type="button" title="关闭节点详情" aria-label="关闭节点详情" onClick={() => setViewingNodeKey(null)}><X size={17} /></button>
+            </div>
+            <div className="node-detail-meta">
+              <span><strong>协议</strong>{String(viewingNodeRow.node.type || "-").toUpperCase()}</span>
+              <span><strong>服务器</strong>{String(viewingNodeRow.node.server || "-")}:{String(viewingNodeRow.node.port || "-")}</span>
+              <span><strong>来源</strong>{viewingNodeRow.sourceName}</span>
+            </div>
+            <pre className="node-detail-content"><code>{JSON.stringify(viewingNodeRow.node, null, 2)}</code></pre>
+            <div className="node-detail-actions">
+              <button className="accent-button" type="button" onClick={() => setViewingNodeKey(null)}>关闭</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {pendingTlsReview ? (
         <div className="tls-review-backdrop">
