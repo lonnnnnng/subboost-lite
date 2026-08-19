@@ -10,6 +10,15 @@ export type SubscriptionImportFailure = {
 
 export const SUBSCRIPTION_IMPORT_TIMEOUT_MS = 15_000;
 export const SUBSCRIPTION_IMPORT_TIMEOUT_MESSAGE = "导入 15s 超时";
+export const SUBSCRIPTION_IMPORT_CONCURRENCY = 10;
+
+export function appendSubscriptionFileContents(current: string, fileContents: readonly string[]): string {
+  // long: 文件只负责补充订阅链接，统一清理块边界的空行后再拼接，避免原输入与多个文件首尾粘成同一条 URL。
+  return [current, ...fileContents]
+    .map((content) => content.replace(/^[\r\n]+|[\r\n]+$/g, ""))
+    .filter((content) => content.trim().length > 0)
+    .join("\n");
+}
 
 export async function runSubscriptionImportWithTimeout<T>(
   operation: (signal: AbortSignal) => Promise<T>,
@@ -26,6 +35,28 @@ export async function runSubscriptionImportWithTimeout<T>(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+export async function mapSubscriptionImportsWithConcurrency<T, R>(
+  items: readonly T[],
+  worker: (item: T, index: number) => Promise<R>,
+  concurrency = SUBSCRIPTION_IMPORT_CONCURRENCY
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+
+  const runWorker = async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      // long: 链接取得并发槽后才进入业务 worker，单条 15 秒计时不会包含前面的排队等待时间。
+      results[index] = await worker(items[index], index);
+    }
+  };
+
+  const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
+  await Promise.all(Array.from({ length: workerCount }, runWorker));
+  return results;
 }
 
 export function parseSubscriptionUrlBatch(input: string): SubscriptionUrlBatch {

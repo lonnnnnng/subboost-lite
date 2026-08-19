@@ -6,6 +6,7 @@ import {
   Braces,
   Bot,
   Check,
+  ChevronDown,
   ChevronRight,
   CircleAlert,
   Clipboard,
@@ -41,7 +42,9 @@ import type { BuiltinRuleEdits, ClashConfig, InternalDomainRule, TemplateType } 
 import type { NodeWithMeta, ParsedNode } from "@subboost/core/types/node";
 import { YamlHighlight } from "@/components/yaml-highlight";
 import {
+  appendSubscriptionFileContents,
   formatSubscriptionImportFailures,
+  mapSubscriptionImportsWithConcurrency,
   parseSubscriptionUrlBatch,
   runSubscriptionImportWithTimeout,
   SUBSCRIPTION_IMPORT_TIMEOUT_MESSAGE,
@@ -100,6 +103,22 @@ type BatchImportResult = {
   reviewCount: number;
   duplicateCount: number;
   failures: SubscriptionImportFailure[];
+};
+
+type BatchImportProgress = {
+  total: number;
+  completed: number;
+  active: number;
+  success: number;
+  failure: number;
+  review: number;
+};
+
+type NodeTestProgressSummary = {
+  total: number;
+  completed: number;
+  available: number;
+  failed: number;
 };
 
 const SOURCE_META: Record<SourceKind, { label: string; placeholder: string }> = {
@@ -250,11 +269,7 @@ function nodeKey(sourceId: string, nodeIndex: number): string {
 }
 
 function nodeIpForDedup(row: NodeRow): string | null {
-  const meta = (row.node as NodeWithMeta)._meta;
-  const egressIp = String(meta?.egressIp ?? "").trim();
-  if (egressIp) return egressIp.toLowerCase();
-
-  // long: 只有明确的字面 IP 才允许自动去重，域名可能解析到多个出口，不能把相同域名误判成同一节点。
+  // long: 去重按订阅中“服务器”字段判断网络出口；不同端口仍共用同一服务器，因此必须归为同一节点。
   const server = String(row.node.server ?? "").trim().replace(/^\[|\]$/g, "");
   if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(server)) return server.toLowerCase();
   if (server.includes(":") && /^[0-9a-f:]+$/i.test(server)) return server.toLowerCase();
@@ -386,6 +401,101 @@ function NodeNameEditor({ value, onCommit, label }: { value: string; onCommit: (
   );
 }
 
+type ProviderSourceOptionId = keyof typeof RULE_PROVIDER_SOURCES | "custom";
+
+const PROVIDER_SOURCE_OPTIONS: Array<{ id: ProviderSourceOptionId; label: string }> = [
+  ...(Object.entries(RULE_PROVIDER_SOURCES) as Array<[
+    keyof typeof RULE_PROVIDER_SOURCES,
+    { label: string; baseUrl: string }
+  ]>).map(([id, source]) => ({ id, label: source.label })),
+  { id: "custom", label: "自定义 URL 前缀" },
+];
+
+function ProviderSourceSelect({ value, onChange }: { value: ProviderSourceOptionId; onChange: (value: ProviderSourceOptionId) => void }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const selectedOption = PROVIDER_SOURCE_OPTIONS.find((option) => option.id === value) ?? PROVIDER_SOURCE_OPTIONS[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [open]);
+
+  function handleOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const options = Array.from(rootRef.current?.querySelectorAll<HTMLButtonElement>("[role='option']") ?? []);
+    const currentIndex = options.indexOf(event.currentTarget);
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? options.length - 1
+        : event.key === "ArrowDown"
+          ? (currentIndex + 1) % options.length
+          : (currentIndex - 1 + options.length) % options.length;
+    options[nextIndex]?.focus();
+  }
+
+  return (
+    <div className="provider-source-select" ref={rootRef}>
+      <button
+        id="provider-source"
+        ref={triggerRef}
+        className="form-control provider-source-trigger"
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls="provider-source-options"
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setOpen(true);
+          }
+          if (event.key === "Escape") setOpen(false);
+        }}
+      >
+        <span>{selectedOption.label}</span>
+        <ChevronDown size={16} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div id="provider-source-options" className="provider-source-menu" role="listbox" aria-label="规则集下载源选项">
+          {PROVIDER_SOURCE_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              className={`provider-source-option${option.id === value ? " selected" : ""}`}
+              type="button"
+              role="option"
+              aria-selected={option.id === value}
+              autoFocus={option.id === value}
+              onKeyDown={handleOptionKeyDown}
+              onClick={() => {
+                onChange(option.id);
+                setOpen(false);
+                triggerRef.current?.focus();
+              }}
+            >
+              <span>{option.label}</span>
+              {option.id === value ? <Check size={15} aria-hidden="true" /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function Workbench() {
   const [sources, setSources] = useState<SourceRecord[]>([]);
   const [sourceKind, setSourceKind] = useState<SourceKind>("url");
@@ -404,6 +514,7 @@ export function Workbench() {
   const [selectedNodeKeys, setSelectedNodeKeys] = useState<Set<string>>(() => new Set());
   const [testingNodeKeys, setTestingNodeKeys] = useState<Set<string>>(() => new Set());
   const [testingMode, setTestingMode] = useState<NodeTestMode | null>(null);
+  const [nodeTestProgress, setNodeTestProgress] = useState<NodeTestProgressSummary | null>(null);
   const [connectivityTimeoutSeconds, setConnectivityTimeoutSeconds] = useState(3.5);
   const [speedTestDurationSeconds, setSpeedTestDurationSeconds] = useState(15);
   const [speedTestConcurrency, setSpeedTestConcurrency] = useState(10);
@@ -413,10 +524,12 @@ export function Workbench() {
   const [pendingTlsReviews, setPendingTlsReviews] = useState<PendingTlsReview[]>([]);
   const pendingTlsReview = pendingTlsReviews[0] ?? null;
   const [batchImportResult, setBatchImportResult] = useState<BatchImportResult | null>(null);
+  const [batchImportProgress, setBatchImportProgress] = useState<BatchImportProgress | null>(null);
   const [viewingNodeKey, setViewingNodeKey] = useState<string | null>(null);
   const [showDecodedReview, setShowDecodedReview] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const sourceInputRef = useRef<HTMLTextAreaElement>(null);
+  const urlFileRef = useRef<HTMLInputElement>(null);
   const yamlFileRef = useRef<HTMLInputElement>(null);
   const templateFileRef = useRef<HTMLInputElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -497,10 +610,6 @@ export function Workbench() {
     () => visibleNodeRows.filter((row) => selectedNodeKeys.has(nodeKey(row.sourceId, row.nodeIndex))),
     [visibleNodeRows, selectedNodeKeys]
   );
-  const failedNodeKeys = useMemo(() => new Set(nodeRows
-    // long: 仅删除代理探测确认不可用的节点；内核不可用属于测试环境故障，不能据此批量清理用户节点。
-    .filter((row) => (row.node as NodeWithMeta)._meta?.latencyTestStatus === "unavailable")
-    .map((row) => nodeKey(row.sourceId, row.nodeIndex))), [nodeRows]);
   const duplicateNodeKeys = useMemo(() => {
     const seen = new Set<string>();
     const duplicates = new Set<string>();
@@ -790,6 +899,14 @@ export function Workbench() {
       if (message.type === "result") {
         if (message.mode === mode) {
           applyNodeTestResult(message.result, message.mode);
+          if (mode === "latency") {
+            setNodeTestProgress((current) => current ? {
+              ...current,
+              completed: current.completed + 1,
+              available: current.available + (message.result.proxy.status === "available" ? 1 : 0),
+              failed: current.failed + (message.result.proxy.status === "available" ? 0 : 1),
+            } : current);
+          }
           setTestingNodeKeys((current) => {
             const next = new Set(current);
             next.delete(message.result.key);
@@ -843,6 +960,11 @@ export function Workbench() {
       })));
     }
     setTestingMode(mode);
+    if (mode === "latency") {
+      setNodeTestProgress({ total: rows.length, completed: 0, available: 0, failed: 0 });
+    } else {
+      setNodeTestProgress(null);
+    }
     setTestingNodeKeys((current) => new Set([...current, ...keys]));
     try {
       const response = await fetch("/api/node-test", {
@@ -863,6 +985,14 @@ export function Workbench() {
       const result = await readNodeTestResponse(response, mode);
       if (!result.ok) throw new Error(result.error);
       result.results.forEach((item) => applyNodeTestResult(item, result.mode));
+      if (mode === "latency") {
+        setNodeTestProgress({
+          total: rows.length,
+          completed: result.results.length,
+          available: result.results.filter((item) => item.proxy.status === "available").length,
+          failed: result.results.filter((item) => item.proxy.status !== "available").length,
+        });
+      }
       const availableCount = result.results.filter((item) => item.proxy.status === "available").length;
       showNotice("ok", `${mode === "latency" ? "连通/延迟测试" : "下载测速"}完成：${availableCount}/${result.results.length} 个节点可用${result.coreVersion ? ` · Mihomo ${result.coreVersion}` : ""}`);
     } catch (error) {
@@ -874,6 +1004,7 @@ export function Workbench() {
         return next;
       });
       setTestingMode(null);
+      setNodeTestProgress(null);
     }
   }
 
@@ -967,8 +1098,11 @@ export function Workbench() {
       }
       const isBatchImport = urls.length + duplicateCount > 1;
 
-      // long: 每条请求自行收敛为成功、待审核或失败，单个订阅异常不能中断同批其他链接。
-      const outcomes = await Promise.all(urls.map(async (url): Promise<UrlImportOutcome> => {
+      // long: 并发池领取链接后才启动该条的 15 秒计时，浏览器连接排队不会让后面的订阅提前超时。
+      setBatchImportProgress({ total: urls.length, completed: 0, active: 0, success: 0, failure: 0, review: 0 });
+      const outcomes = await mapSubscriptionImportsWithConcurrency(urls, async (url): Promise<UrlImportOutcome> => {
+        setBatchImportProgress((current) => current ? { ...current, active: current.active + 1 } : current);
+        let outcome: UrlImportOutcome;
         try {
           const result = await runSubscriptionImportWithTimeout(async (signal) => {
             const response = await fetch("/api/import", {
@@ -979,9 +1113,10 @@ export function Workbench() {
             });
             return await response.json() as ApiImportResponse;
           });
-          if (!result.ok) return { status: "failed", url, error: result.detail || result.error };
-          if (result.reviewRequired) {
-            return {
+          if (!result.ok) {
+            outcome = { status: "failed", url, error: result.detail || result.error };
+          } else if (result.reviewRequired) {
+            outcome = {
               status: "review",
               review: {
                 url,
@@ -991,12 +1126,25 @@ export function Workbench() {
                 errors: result.errors,
               },
             };
+          } else {
+            outcome = { status: "ready", url, content: result.content, nodes: result.nodes, errors: result.errors };
           }
-          return { status: "ready", url, content: result.content, nodes: result.nodes, errors: result.errors };
         } catch (error) {
-          return { status: "failed", url, error: error instanceof Error ? error.message : "订阅链接导入失败" };
+          outcome = { status: "failed", url, error: error instanceof Error ? error.message : "订阅链接导入失败" };
         }
-      }));
+        setBatchImportProgress((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            active: Math.max(0, current.active - 1),
+            completed: current.completed + 1,
+            success: current.success + (outcome.status === "ready" ? 1 : 0),
+            failure: current.failure + (outcome.status === "failed" ? 1 : 0),
+            review: current.review + (outcome.status === "review" ? 1 : 0),
+          };
+        });
+        return outcome;
+      });
 
       const readyOutcomes = outcomes.filter((outcome): outcome is Extract<UrlImportOutcome, { status: "ready" }> => outcome.status === "ready");
       const reviewQueue = outcomes
@@ -1057,6 +1205,7 @@ export function Workbench() {
       showNotice("error", error instanceof Error ? error.message : "订阅链接导入失败");
     } finally {
       setBusy(false);
+      setBatchImportProgress(null);
     }
   }
 
@@ -1075,6 +1224,19 @@ export function Workbench() {
       showNotice("error", error instanceof Error ? error.message : "YAML 文件导入失败");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleUrlFiles(files: FileList | null) {
+    if (!files?.length) return;
+    try {
+      const selectedFiles = Array.from(files);
+      const contents = await Promise.all(selectedFiles.map((file) => file.text()));
+      setSourceInput((current) => appendSubscriptionFileContents(current, contents));
+      showNotice("ok", `已追加 ${selectedFiles.length} 个订阅链接文件`);
+      window.setTimeout(() => sourceInputRef.current?.focus(), 0);
+    } catch (error) {
+      showNotice("error", error instanceof Error ? error.message : "订阅链接文件读取失败");
     }
   }
 
@@ -1216,8 +1378,37 @@ export function Workbench() {
             <strong>{sourceInputLineCount > 0 ? `${sourceInputLineCount} 行待处理` : "等待输入"}</strong>
           </div>
 
+          {batchImportProgress ? (
+            <div className="batch-import-progress" role="status" aria-live="polite">
+              <div className="batch-import-progress-heading">
+                <strong>正在导入订阅</strong>
+                <span>{batchImportProgress.completed} / {batchImportProgress.total} 已完成 · {batchImportProgress.active} 条处理中 · {Math.max(0, batchImportProgress.total - batchImportProgress.completed - batchImportProgress.active)} 条排队</span>
+              </div>
+              <div
+                className="batch-import-progress-track"
+                role="progressbar"
+                aria-label="批量订阅导入进度"
+                aria-valuemin={0}
+                aria-valuemax={batchImportProgress.total}
+                aria-valuenow={batchImportProgress.completed}
+              >
+                <i style={{ width: `${Math.round((batchImportProgress.completed / batchImportProgress.total) * 100)}%` }} />
+              </div>
+              <div className="batch-import-progress-stats">
+                <span className="success">成功 <strong>{batchImportProgress.success}</strong></span>
+                <span className="failure">失败 <strong>{batchImportProgress.failure}</strong></span>
+                <span className="review">待审核 <strong>{batchImportProgress.review}</strong></span>
+              </div>
+            </div>
+          ) : null}
+
           <div className="source-actions">
-            {sourceKind === "yaml" ? (
+            {sourceKind === "url" ? (
+              <>
+                <input ref={urlFileRef} className="sr-only" type="file" multiple accept=".txt,.list,.conf,text/plain" onChange={(event) => { void handleUrlFiles(event.target.files); event.currentTarget.value = ""; }} />
+                <button className="secondary-button" type="button" disabled={busy} onClick={() => urlFileRef.current?.click()}><FileUp size={16} />选择文件</button>
+              </>
+            ) : sourceKind === "yaml" ? (
               <>
                 <input ref={yamlFileRef} className="sr-only" type="file" accept=".yaml,.yml,text/yaml,application/yaml" onChange={(event) => { void handleYamlFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
                 <button className="secondary-button" type="button" onClick={() => yamlFileRef.current?.click()}><FileUp size={16} />选择文件</button>
@@ -1226,7 +1417,7 @@ export function Workbench() {
             {sourceInput.trim() ? <button className="secondary-button compact-button source-clear-button" type="button" onClick={() => { setSourceInput(""); window.setTimeout(() => sourceInputRef.current?.focus(), 0); }} disabled={busy} title="清空当前输入" aria-label="清空当前输入"><X size={15} />清空输入</button> : null}
             <button className="accent-button" type="button" onClick={() => void handleAddSource()} disabled={busy}>
               {busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}
-              {busy ? "导入中" : sourceKind === "url" ? "批量导入" : "加入来源"}
+              {batchImportProgress ? `导入中 ${batchImportProgress.completed}/${batchImportProgress.total}` : busy ? "导入中" : sourceKind === "url" ? "批量导入" : "加入来源"}
             </button>
           </div>
 
@@ -1265,31 +1456,19 @@ export function Workbench() {
           </div>
           <p className="template-description">{template.description}</p>
 
-          <label className="field-label" htmlFor="template-name">模板名称</label>
-          <input id="template-name" className="form-control" value={template.name} onChange={(event) => setTemplate((current) => ({ ...current, name: event.target.value }))} />
-
           <div className="optimization-settings" aria-label="规则优化设置">
             <div className="optimization-heading"><span><Cloud size={14} />下载与规则策略</span><small>适配 FlClash / Mihomo</small></div>
             <label className="field-label" htmlFor="provider-source">规则集下载源</label>
-            <select
-              id="provider-source"
-              className="form-control"
+            <ProviderSourceSelect
               value={providerSourceId}
-              onChange={(event) => {
-                const source = event.target.value as keyof typeof RULE_PROVIDER_SOURCES | "custom";
+              onChange={(source) => {
                 if (source === "custom") {
                   setTemplate((current) => ({ ...current, ruleProviderBaseUrl: "https://rules.example.com/geo" }));
                   return;
                 }
                 setTemplate((current) => ({ ...current, ruleProviderBaseUrl: RULE_PROVIDER_SOURCES[source].baseUrl }));
               }}
-            >
-              {(Object.entries(RULE_PROVIDER_SOURCES) as Array<[
-                keyof typeof RULE_PROVIDER_SOURCES,
-                { label: string; baseUrl: string }
-              ]>).map(([id, source]) => <option key={id} value={id}>{source.label}</option>)}
-              <option value="custom">自定义 URL 前缀</option>
-            </select>
+            />
             {providerSourceId === "custom" ? (
               <input
                 className="form-control custom-source-url"
@@ -1495,9 +1674,6 @@ export function Workbench() {
                     <button className="secondary-button compact-button danger-button" type="button" onClick={() => removeNodes(new Set(visibleSelectedRows.map((row) => nodeKey(row.sourceId, row.nodeIndex))))} disabled={testingNodeKeys.size > 0 || visibleSelectedRows.length === 0} title="删除当前筛选中选中的节点">
                       <Trash2 size={15} />删除选中
                     </button>
-                    <button className="secondary-button compact-button danger-button" type="button" onClick={() => removeNodes(failedNodeKeys, "测试失败的")} disabled={testingNodeKeys.size > 0 || failedNodeKeys.size === 0} title="删除所有代理连通/延迟测试失败的节点">
-                      <Trash2 size={15} />删除失败 ({failedNodeKeys.size})
-                    </button>
                     <button className="secondary-button compact-button" type="button" onClick={renameNodesByRegion} disabled={testingNodeKeys.size > 0 || regionReadyRows.length === 0} title={regionReadyRows.length > 0 ? "根据已识别的节点区域批量命名" : "请先测试节点或手动填写区域"}>
                       <WandSparkles size={15} />按区域命名
                     </button>
@@ -1512,6 +1688,28 @@ export function Workbench() {
                     </button>
                   </div>
                 </div>
+                {nodeTestProgress ? (
+                  <div className="batch-import-progress node-test-progress" role="status" aria-live="polite">
+                    <div className="batch-import-progress-heading">
+                      <strong>正在测试连通性与延迟</strong>
+                      <span>{nodeTestProgress.completed} / {nodeTestProgress.total} 已完成 · {nodeTestProgress.total - nodeTestProgress.completed} 个待返回</span>
+                    </div>
+                    <div
+                      className="batch-import-progress-track"
+                      role="progressbar"
+                      aria-label="节点连通性与延迟测试进度"
+                      aria-valuemin={0}
+                      aria-valuemax={nodeTestProgress.total}
+                      aria-valuenow={nodeTestProgress.completed}
+                    >
+                      <i style={{ width: `${Math.round((nodeTestProgress.completed / nodeTestProgress.total) * 100)}%` }} />
+                    </div>
+                    <div className="batch-import-progress-stats">
+                      <span className="success">可用 <strong>{nodeTestProgress.available}</strong></span>
+                      <span className="failure">测试失败 <strong>{nodeTestProgress.failed}</strong></span>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="node-filter-bar" aria-label="节点筛选">
                   <div className="node-filter-search">
                     <Search size={14} aria-hidden="true" />
@@ -1557,9 +1755,9 @@ export function Workbench() {
                           <div className={`node-list-row${proxyTestFailed ? " node-list-row-error" : ""}`} key={key}>
                             <label className="node-check"><input type="checkbox" checked={selectedNodeKeys.has(key)} onChange={(event) => toggleNodeSelection(key, event.target.checked)} aria-label={`选择节点 ${index + 1}`} /></label>
                             <span className="node-list-index">{String(index + 1).padStart(2, "0")}</span>
-                            <NodeNameEditor key={`${key}-${row.node.name}`} value={row.node.name} label={`节点 ${index + 1} 名称`} onCommit={(name) => renameNode(row.sourceId, row.nodeIndex, name)} />
+                            <NodeNameEditor key={`name:${key}:${row.node.name}`} value={row.node.name} label={`节点 ${index + 1} 名称`} onCommit={(name) => renameNode(row.sourceId, row.nodeIndex, name)} />
                             <NodeRegionEditor
-                              key={`${key}-${detectNodeRegion(row.node)}`}
+                              key={`region:${key}:${detectNodeRegion(row.node)}`}
                               value={detectNodeRegion(row.node)}
                               label={`节点 ${index + 1} 区域`}
                               hint={meta?.egressIp ? `实际出口 ${meta.egressIp}${meta.egressProvider ? ` · ${meta.egressProvider}` : ""}` : meta?.egressError}
