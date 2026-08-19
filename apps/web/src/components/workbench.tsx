@@ -42,6 +42,7 @@ import {
   parseSubscriptionUrlBatch,
   runSubscriptionImportWithTimeout,
   SUBSCRIPTION_IMPORT_TIMEOUT_MESSAGE,
+  type SubscriptionImportFailure,
 } from "@/lib/batch-import";
 import {
   ADRULES_MIHOMO_URL,
@@ -89,6 +90,14 @@ type UrlImportOutcome =
   | { status: "ready"; url: string; content: string; nodes: ParsedNode[]; errors: string[] }
   | { status: "review"; review: PendingTlsReview }
   | { status: "failed"; url: string; error: string };
+
+type BatchImportResult = {
+  successCount: number;
+  failureCount: number;
+  reviewCount: number;
+  duplicateCount: number;
+  failures: SubscriptionImportFailure[];
+};
 
 const SOURCE_META: Record<SourceKind, { label: string; placeholder: string }> = {
   url: { label: "订阅链接", placeholder: "https://example.com/subscription\nhttps://example.net/subscription" },
@@ -370,6 +379,7 @@ export function Workbench() {
   const [speedTestMaxDataMb, setSpeedTestMaxDataMb] = useState(300);
   const [pendingTlsReviews, setPendingTlsReviews] = useState<PendingTlsReview[]>([]);
   const pendingTlsReview = pendingTlsReviews[0] ?? null;
+  const [batchImportResult, setBatchImportResult] = useState<BatchImportResult | null>(null);
   const [viewingNodeKey, setViewingNodeKey] = useState<string | null>(null);
   const [showDecodedReview, setShowDecodedReview] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
@@ -386,7 +396,7 @@ export function Workbench() {
   }, []);
 
   useEffect(() => {
-    if (!pendingTlsReview) return;
+    if (!pendingTlsReview || batchImportResult) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setShowDecodedReview(false);
@@ -395,7 +405,7 @@ export function Workbench() {
     };
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
-  }, [pendingTlsReview]);
+  }, [batchImportResult, pendingTlsReview]);
 
   const nodeRows = useMemo<NodeRow[]>(() => sources.flatMap((source) => source.nodes.map((node, nodeIndex) => ({
     sourceId: source.id,
@@ -832,6 +842,7 @@ export function Workbench() {
         showNotice("error", "请输入至少一个订阅链接");
         return;
       }
+      const isBatchImport = urls.length + duplicateCount > 1;
 
       // long: 每条请求自行收敛为成功、待审核或失败，单个订阅异常不能中断同批其他链接。
       const outcomes = await Promise.all(urls.map(async (url): Promise<UrlImportOutcome> => {
@@ -890,6 +901,19 @@ export function Workbench() {
       setSourceInput(failures.map((item) => item.url).join("\n"));
       setShowDecodedReview(false);
       setPendingTlsReviews(reviewQueue);
+
+      if (isBatchImport) {
+        // long: 证书审核队列先暂存，必须确认本批汇总后才展示，避免审核弹框遮住成功与失败结果。
+        setNotice(null);
+        setBatchImportResult({
+          successCount: readyOutcomes.length,
+          failureCount: failures.length,
+          reviewCount: reviewQueue.length,
+          duplicateCount,
+          failures,
+        });
+        return;
+      }
 
       const summary = [
         `${readyOutcomes.length} 个已导入`,
@@ -1455,7 +1479,39 @@ export function Workbench() {
         </div>
       ) : null}
 
-      {pendingTlsReview ? (
+      {batchImportResult ? (
+        <div className="batch-result-backdrop">
+          <section className="batch-result-dialog" role="dialog" aria-modal="true" aria-labelledby="batch-result-title" aria-describedby="batch-result-description">
+            <div className="batch-result-heading">
+              <span className="step-index">导入结果</span>
+              <h2 id="batch-result-title">批量订阅处理完成</h2>
+              <p id="batch-result-description">请确认本次处理结果，确认后再继续处理需要人工审核的订阅。</p>
+            </div>
+            <div className="batch-result-summary" aria-label="批量导入统计">
+              <div className="is-success"><span>导入成功</span><strong>{batchImportResult.successCount}</strong><small>条</small></div>
+              <div className="is-failure"><span>导入失败</span><strong>{batchImportResult.failureCount}</strong><small>条</small></div>
+              <div className="is-review"><span>待人工确认</span><strong>{batchImportResult.reviewCount}</strong><small>条</small></div>
+            </div>
+            {batchImportResult.duplicateCount > 0 ? <div className="batch-result-duplicates">已自动忽略 {batchImportResult.duplicateCount} 条重复链接</div> : null}
+            {batchImportResult.failures.length > 0 ? (
+              <div className="batch-result-failures">
+                <strong>失败明细</strong>
+                <ul>
+                  {batchImportResult.failures.map((failure, index) => (
+                    <li key={`${failure.url}-${index}`}><span>{failure.url}</span><small>{failure.error}</small></li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <div className="batch-result-actions">
+              <span>{batchImportResult.reviewCount > 0 ? `确认后将继续审核 ${batchImportResult.reviewCount} 条订阅` : "本批次无需后续人工审核"}</span>
+              <button className="accent-button" type="button" autoFocus onClick={() => setBatchImportResult(null)}>确认结果</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {!batchImportResult && pendingTlsReview ? (
         <div className="tls-review-backdrop">
           <section className="tls-review-dialog" role="dialog" aria-modal="true" aria-labelledby="tls-review-title">
             <div className="tls-review-heading">
