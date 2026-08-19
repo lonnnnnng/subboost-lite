@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ParsedNode } from "@subboost/core/types/node";
-import { buildRegionNodeNames, countryCodeToRegion, detectNodeRegion } from "./node-region";
+import { buildRegionNodeNames, countryCodeToRegion, detectNodeRegion, UNKNOWN_NODE_REGION } from "./node-region";
 
 function node(input: { name: string; server: string; region?: string }): ParsedNode {
   return {
@@ -16,7 +16,7 @@ function node(input: { name: string; server: string; region?: string }): ParsedN
 describe("node region naming", () => {
   it("only accepts tested egress metadata and ignores node names", () => {
     expect(detectNodeRegion(node({ name: "香港高速节点", server: "example.com", region: "美国" }))).toBe("美国");
-    expect(detectNodeRegion(node({ name: "香港高速节点", server: "hk.example.com" }))).toBe("其他");
+    expect(detectNodeRegion(node({ name: "香港高速节点", server: "hk.example.com" }))).toBe(UNKNOWN_NODE_REGION);
   });
 
   it("renders egress ISO country codes as Chinese region labels", () => {

@@ -6,6 +6,8 @@ export type RegionNamedNode = {
   name: string;
 };
 
+export const UNKNOWN_NODE_REGION = "待测试";
+
 const REGION_LABEL_OVERRIDES: Record<string, string> = {
   CN: "中国大陆",
   HK: "香港",
@@ -30,7 +32,7 @@ export function countryCodeToRegion(code: string | null | undefined): string {
 
 export function detectNodeRegion(node: ParsedNode): string {
   // long: 自动区域只接受节点测试得到的真实代理出口，节点名称、入口域名和服务器 IP 不参与推断。
-  return (node as NodeWithMeta)._meta?.region?.trim() || "其他";
+  return (node as NodeWithMeta)._meta?.region?.trim() || UNKNOWN_NODE_REGION;
 }
 
 export function buildRegionNodeNames(

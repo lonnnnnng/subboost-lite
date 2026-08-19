@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   Activity,
   Braces,
@@ -27,6 +27,7 @@ import {
   Trash2,
   Upload,
   WandSparkles,
+  X,
 } from "lucide-react";
 import { generateClashConfig, generateClashYaml } from "@subboost/core/generator";
 import { PROXY_GROUP_MODULES } from "@subboost/core/generator/proxy-groups";
@@ -49,7 +50,7 @@ import {
   REQUIRED_MODULES,
   safeFileName,
 } from "@/lib/lite-template";
-import { buildRegionNodeNames, countryCodeToRegion, detectNodeRegion } from "@/lib/node-region";
+import { buildRegionNodeNames, countryCodeToRegion, detectNodeRegion, UNKNOWN_NODE_REGION } from "@/lib/node-region";
 import { MAX_SPEED_TEST_NODES, type NodeTestApiResponse, type NodeTestMode, type NodeTestProgress, type NodeTestResult, type NodeTestStreamMessage, type SpeedTestSource } from "@/lib/node-test/types";
 
 type SourceKind = "url" | "yaml" | "nodes";
@@ -235,7 +236,14 @@ function nodeKey(sourceId: string, nodeIndex: number): string {
   return `${sourceId}:${nodeIndex}`;
 }
 
-const REGION_OPTIONS = ["香港", "澳门", "台湾", "日本", "韩国", "新加坡", "美国", "加拿大", "英国", "德国", "法国", "澳大利亚", "印度", "俄罗斯", "中国大陆", "其他"];
+const REGION_OPTIONS = ["香港", "澳门", "台湾", "日本", "韩国", "新加坡", "美国", "加拿大", "英国", "德国", "法国", "澳大利亚", "印度", "俄罗斯", "中国大陆", "其他", UNKNOWN_NODE_REGION];
+
+function getMatchingBuiltinTemplate(template: LiteTemplate): TemplateType | null {
+  for (const type of ["minimal", "standard", "full"] as TemplateType[]) {
+    if (JSON.stringify(template) === JSON.stringify(createBuiltinTemplate(type))) return type;
+  }
+  return null;
+}
 
 function formatLatency(meta: NodeWithMeta["_meta"]): string {
   const status = meta?.latencyTestStatus ?? meta?.proxyTestStatus;
@@ -298,7 +306,7 @@ function NodeRegionEditor({ value, onCommit, label, hint }: { value: string; onC
   return (
     <div className="node-region-editor">
       <input
-        className="node-region-input"
+        className={`node-region-input${value === UNKNOWN_NODE_REGION ? " pending" : ""}`}
         list="node-region-options"
         value={draft}
         aria-label={label}
@@ -363,6 +371,7 @@ export function Workbench() {
   const pendingTlsReview = pendingTlsReviews[0] ?? null;
   const [showDecodedReview, setShowDecodedReview] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const sourceInputRef = useRef<HTMLTextAreaElement>(null);
   const yamlFileRef = useRef<HTMLInputElement>(null);
   const templateFileRef = useRef<HTMLInputElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
@@ -400,10 +409,12 @@ export function Workbench() {
     // long: 仅删除代理探测确认不可用的节点；内核不可用属于测试环境故障，不能据此批量清理用户节点。
     .filter((row) => (row.node as NodeWithMeta)._meta?.latencyTestStatus === "unavailable")
     .map((row) => nodeKey(row.sourceId, row.nodeIndex))), [nodeRows]);
+  const regionReadyRows = useMemo(() => nodeRows.filter((row) => detectNodeRegion(row.node) !== UNKNOWN_NODE_REGION), [nodeRows]);
   const allNodesSelected = nodeRows.length > 0 && selectedRows.length === nodeRows.length;
   const someNodesSelected = selectedRows.length > 0 && !allNodesSelected;
   const allNodes = useMemo(() => nodeRows.map((row) => row.node), [nodeRows]);
   const output = useMemo(() => buildOutput(allNodes, template), [allNodes, template]);
+  const matchingBuiltinTemplate = useMemo(() => getMatchingBuiltinTemplate(template), [template]);
   const groups = (output.config?.["proxy-groups"] ?? []) as Array<{
     name: string;
     type: string;
@@ -420,6 +431,10 @@ export function Workbench() {
     () => pendingTlsReview ? decodeReviewBase64(pendingTlsReview.content) : null,
     [pendingTlsReview]
   );
+  const sourceInputLineCount = useMemo(
+    () => sourceInput.split(/\r?\n/).filter((line) => line.trim()).length,
+    [sourceInput]
+  );
   const reviewPreview = pendingTlsReview
     ? buildReviewPreview(showDecodedReview && decodedReviewContent ? decodedReviewContent : pendingTlsReview.content)
     : "";
@@ -431,6 +446,22 @@ export function Workbench() {
   function showNotice(tone: "ok" | "error", text: string) {
     setNotice({ tone, text });
     window.setTimeout(() => setNotice((current) => current?.text === text ? null : current), 3200);
+  }
+
+  function selectSourceKind(kind: SourceKind) {
+    if (kind !== sourceKind) {
+      // long: 不同来源的文本格式互斥，快捷入口也必须清空旧内容，避免切换后误解析上一种格式。
+      setSourceKind(kind);
+      setSourceInput("");
+    }
+    window.setTimeout(() => sourceInputRef.current?.focus(), 0);
+  }
+
+  function handleSourceShortcut(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      void handleAddSource();
+    }
   }
 
   function advanceTlsReview() {
@@ -464,7 +495,11 @@ export function Workbench() {
   }
 
   function renameNodesByRegion() {
-    const renamedNodes = buildRegionNodeNames(nodeRows);
+    if (regionReadyRows.length === 0) {
+      showNotice("error", "请先完成节点测试或手动填写区域，再按区域命名");
+      return;
+    }
+    const renamedNodes = buildRegionNodeNames(regionReadyRows);
     const nameByPosition = new Map(renamedNodes.map((item) => [`${item.sourceId}:${item.nodeIndex}`, item.name]));
 
     // long: 批量命名在一次状态更新中完成，避免中途生成包含一半新名称、一半旧名称的配置预览。
@@ -475,7 +510,7 @@ export function Workbench() {
         name: nameByPosition.get(`${source.id}:${nodeIndex}`) ?? node.name,
       })),
     })));
-    showNotice("ok", `已按区域重命名 ${renamedNodes.length} 个节点`);
+    showNotice("ok", `已按区域重命名 ${renamedNodes.length} 个节点${renamedNodes.length < nodeRows.length ? `，${nodeRows.length - renamedNodes.length} 个待测试节点保留原名` : ""}`);
   }
 
   function setNodeRegion(sourceId: string, nodeIndex: number, region: string) {
@@ -920,26 +955,30 @@ export function Workbench() {
   }
 
   function exportTemplate() {
-    downloadText(
-      `${JSON.stringify(template, null, 2)}\n`,
-      `${safeFileName(template.name)}.template.json`,
-      "application/json;charset=utf-8"
-    );
+    const fileName = `${safeFileName(template.name)}.template.json`;
+    downloadText(`${JSON.stringify(template, null, 2)}\n`, fileName, "application/json;charset=utf-8");
+    showNotice("ok", `模板已导出：${fileName}`);
   }
 
   function downloadConfig() {
     if (!output.yaml) return;
-    downloadText(output.yaml, `${safeFileName(template.name)}.yaml`, "text/yaml;charset=utf-8");
+    const fileName = `${safeFileName(template.name)}.yaml`;
+    downloadText(output.yaml, fileName, "text/yaml;charset=utf-8");
+    showNotice("ok", `配置已下载：${fileName}`);
   }
 
   async function copyYaml() {
     if (!output.yaml) return;
-    await navigator.clipboard.writeText(output.yaml);
-    showNotice("ok", "配置已复制");
+    try {
+      await navigator.clipboard.writeText(output.yaml);
+      showNotice("ok", "YAML 配置已复制到剪贴板");
+    } catch {
+      showNotice("error", "复制失败，请检查浏览器剪贴板权限");
+    }
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" aria-busy={busy || testingNodeKeys.size > 0}>
       <header className="topbar">
         <div className="brand-block">
           <span className="brand-mark" aria-hidden="true">S/</span>
@@ -951,9 +990,13 @@ export function Workbench() {
         <div className="topbar-status" aria-live="polite">
           <span><strong>{sources.length}</strong> 来源</span>
           <span><strong>{allNodes.length}</strong> 节点</span>
-          <span><strong>{template.enabledModules.length}</strong> 分组</span>
+          <span><strong>{template.enabledModules.length}</strong> 模块</span>
         </div>
         <div className="topbar-actions">
+          <div className={`topbar-output-state ${output.error ? "is-error" : allNodes.length > 0 ? "is-ready" : "is-empty"}`} aria-live="polite">
+            <i />
+            <span>{output.error ? "配置有误" : allNodes.length > 0 ? "配置就绪" : "等待来源"}</span>
+          </div>
           <button className="icon-button" type="button" onClick={() => void toggleFullscreen()} title={isFullscreen ? "退出全屏" : "进入全屏"} aria-label={isFullscreen ? "退出全屏" : "进入全屏"}>
             {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
           </button>
@@ -967,7 +1010,7 @@ export function Workbench() {
         </div>
       </header>
 
-      {notice ? <div className={`notice notice-${notice.tone}`}><span>{notice.tone === "ok" ? <Check size={16} /> : <CircleAlert size={16} />}</span>{notice.text}</div> : null}
+      {notice ? <div className={`notice notice-${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"} aria-live={notice.tone === "error" ? "assertive" : "polite"}><span>{notice.tone === "ok" ? <Check size={16} /> : <CircleAlert size={16} />}</span>{notice.text}</div> : null}
 
       <div className="workspace">
         <section className="panel source-panel" aria-labelledby="source-title">
@@ -983,12 +1026,7 @@ export function Workbench() {
                 type="button"
                 className={sourceKind === kind ? "active" : ""}
                 disabled={busy}
-                onClick={() => {
-                  if (kind === sourceKind) return;
-                  // long: 三种输入格式不能互相复用，切换来源时清空旧文本，避免把订阅 URL 当作 YAML 或节点链接解析。
-                  setSourceKind(kind);
-                  setSourceInput("");
-                }}
+                onClick={() => selectSourceKind(kind)}
               >
                 {kind === "url" ? <Link2 size={15} /> : kind === "yaml" ? <Code2 size={15} /> : <Network size={15} />}
                 {SOURCE_META[kind].label}
@@ -997,10 +1035,15 @@ export function Workbench() {
           </div>
 
           {sourceKind === "url" ? (
-            <textarea className="source-input source-input-urls" value={sourceInput} onChange={(event) => setSourceInput(event.target.value)} placeholder={SOURCE_META.url.placeholder} spellCheck={false} />
+            <textarea ref={sourceInputRef} className="source-input source-input-urls" value={sourceInput} onChange={(event) => setSourceInput(event.target.value)} onKeyDown={handleSourceShortcut} placeholder={SOURCE_META.url.placeholder} spellCheck={false} aria-describedby="source-input-meta" aria-keyshortcuts="Control+Enter Meta+Enter" />
           ) : (
-            <textarea className="source-input" value={sourceInput} onChange={(event) => setSourceInput(event.target.value)} placeholder={SOURCE_META[sourceKind].placeholder} spellCheck={false} />
+            <textarea ref={sourceInputRef} className="source-input" value={sourceInput} onChange={(event) => setSourceInput(event.target.value)} onKeyDown={handleSourceShortcut} placeholder={SOURCE_META[sourceKind].placeholder} spellCheck={false} aria-describedby="source-input-meta" aria-keyshortcuts="Control+Enter Meta+Enter" />
           )}
+
+          <div id="source-input-meta" className="source-input-meta" role="status" aria-live="polite">
+            <span>{sourceKind === "url" ? "每行一个链接，证书异常会进入人工审核" : sourceKind === "yaml" ? "支持完整 Clash / Mihomo YAML 配置" : "每行一个节点连接，支持 ss / vmess / vless"}</span>
+            <strong>{sourceInputLineCount > 0 ? `${sourceInputLineCount} 行待处理` : "等待输入"}</strong>
+          </div>
 
           <div className="source-actions">
             {sourceKind === "yaml" ? (
@@ -1009,6 +1052,7 @@ export function Workbench() {
                 <button className="secondary-button" type="button" onClick={() => yamlFileRef.current?.click()}><FileUp size={16} />选择文件</button>
               </>
             ) : <span />}
+            {sourceInput.trim() ? <button className="secondary-button compact-button source-clear-button" type="button" onClick={() => { setSourceInput(""); window.setTimeout(() => sourceInputRef.current?.focus(), 0); }} disabled={busy} title="清空当前输入" aria-label="清空当前输入"><X size={15} />清空输入</button> : null}
             <button className="accent-button" type="button" onClick={() => void handleAddSource()} disabled={busy}>
               {busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}
               {busy ? "导入中" : sourceKind === "url" ? "批量导入" : "加入来源"}
@@ -1019,12 +1063,13 @@ export function Workbench() {
             {sources.length === 0 ? (
               <div className="empty-state"><Upload size={22} /><span>等待导入</span></div>
             ) : sources.map((source, index) => (
-              <article className="source-item" key={source.id}>
+              <article className={`source-item${source.errors.length ? " has-errors" : ""}`} key={source.id} title={source.errors.length ? source.errors.join("\n") : undefined}>
                 <div className="source-order">{String(index + 1).padStart(2, "0")}</div>
                 <div className="source-info">
                   <strong>{source.name}</strong>
                   <span>{SOURCE_META[source.kind].label} · {source.nodes.length} 节点{source.errors.length ? ` · ${source.errors.length} 条提示` : ""}</span>
                 </div>
+                {source.errors.length ? <span className="source-warning" role="img" aria-label={`${source.errors.length} 条解析提示`}><CircleAlert size={14} /><small>{source.errors.length} 条提示</small></span> : null}
                 <button className="icon-button compact" type="button" title="移除来源" disabled={testingNodeKeys.size > 0} onClick={() => removeSource(source.id)}><Trash2 size={15} /></button>
               </article>
             ))}
@@ -1033,18 +1078,18 @@ export function Workbench() {
 
         <section className="panel template-panel" aria-labelledby="template-title">
           <div className="panel-heading">
-            <div><span className="step-index">02</span><h2 id="template-title">规则模板</h2></div>
+            <div><span className="step-index">02</span><h2 id="template-title">规则模板</h2>{matchingBuiltinTemplate ? <span className="template-state builtin">内置预设</span> : <span className="template-state custom">已自定义</span>}</div>
             <div className="heading-actions">
               <input ref={templateFileRef} className="sr-only" type="file" accept=".json,application/json" onChange={(event) => { void handleTemplateFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
-              <button className="icon-button compact" type="button" title="导入模板文件" onClick={() => templateFileRef.current?.click()}><FileUp size={15} /></button>
-              <button className="icon-button compact" type="button" title="导出模板文件" onClick={exportTemplate}><FileJson size={15} /></button>
+              <button className="icon-button compact" type="button" title="导入模板文件" aria-label="导入模板文件" onClick={() => templateFileRef.current?.click()}><FileUp size={15} /></button>
+              <button className="icon-button compact" type="button" title="导出模板文件" aria-label="导出模板文件" onClick={exportTemplate}><FileJson size={15} /></button>
             </div>
           </div>
 
           <div className="template-presets">
             {(["minimal", "standard", "full"] as TemplateType[]).map((type) => {
               const labels: Record<TemplateType, string> = { minimal: "轻量", standard: "日常", full: "高级" };
-              return <button key={type} type="button" className={template.baseTemplate === type && !template.name.endsWith("· 自定义") ? "active" : ""} onClick={() => applyBuiltin(type)}>{labels[type]}</button>;
+              return <button key={type} type="button" className={matchingBuiltinTemplate === type ? "active" : ""} onClick={() => applyBuiltin(type)}>{labels[type]}</button>;
             })}
           </div>
           <p className="template-description">{template.description}</p>
@@ -1179,8 +1224,8 @@ export function Workbench() {
           <div className="preview-toolbar">
             <div><span className="step-index">03</span><h2 id="preview-title">配置预览</h2></div>
             <div className="preview-actions">
-              <button className="icon-button compact" type="button" title="复制 YAML" onClick={() => void copyYaml()} disabled={!output.yaml}><Clipboard size={15} /></button>
-              <button className="secondary-button compact-button" type="button" onClick={downloadConfig} disabled={!output.yaml}><Download size={15} />YAML</button>
+              <button className="icon-button compact" type="button" title="复制 YAML" aria-label="复制 YAML" onClick={() => void copyYaml()} disabled={!output.yaml}><Clipboard size={15} /></button>
+              <button className="secondary-button compact-button" type="button" onClick={downloadConfig} disabled={!output.yaml} title="下载当前 YAML 配置"><Download size={15} />YAML</button>
             </div>
           </div>
 
@@ -1197,13 +1242,33 @@ export function Workbench() {
 
           <div className={`preview-content${!output.error && allNodes.length > 0 && previewTab === "visual" ? " preview-content-node-list" : ""}`}>
             {output.error ? <div className="error-state"><CircleAlert size={22} /><strong>生成失败</strong><span>{output.error}</span></div> : null}
-            {!output.error && allNodes.length === 0 ? <div className="preview-empty"><Network size={30} /><strong>尚未生成配置</strong><span>导入任意来源后自动更新</span></div> : null}
+            {!output.error && allNodes.length === 0 ? (
+              <div className="preview-empty">
+                <div className="preview-empty-mark"><Network size={28} /></div>
+                <strong>从任意来源开始</strong>
+                <span>配置会在导入节点后自动生成，模板设置会实时生效。</span>
+                <div className="preview-empty-actions" aria-label="快速导入">
+                  <button type="button" onClick={() => selectSourceKind("url")}>
+                    <Link2 size={16} />
+                    <span><b>订阅链接</b><small>支持批量 URL</small></span>
+                  </button>
+                  <button type="button" onClick={() => { selectSourceKind("yaml"); yamlFileRef.current?.click(); }}>
+                    <FileUp size={16} />
+                    <span><b>YAML 配置</b><small>上传或粘贴文件</small></span>
+                  </button>
+                  <button type="button" onClick={() => selectSourceKind("nodes")}>
+                    <Network size={16} />
+                    <span><b>节点连接</b><small>粘贴 ss / vless</small></span>
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {!output.error && allNodes.length > 0 && previewTab === "visual" ? (
               <div className="node-list-view">
                 <div className="node-list-toolbar">
                   <div>
                     <strong>节点列表</strong>
-                    <span>名称与区域可直接编辑 · 选中 {selectedRows.length} 个</span>
+                    <span>{testingNodeKeys.size > 0 ? `正在${testingMode === "speed" ? "测速" : "测试连通性与延迟"} · ${testingNodeKeys.size} 个节点` : `名称与区域可直接编辑 · 选中 ${selectedRows.length} 个 · 横向滚动查看更多字段`}</span>
                   </div>
                   <div className="node-list-actions">
                     <div className="node-test-group">
@@ -1262,7 +1327,7 @@ export function Workbench() {
                     <button className="secondary-button compact-button danger-button" type="button" onClick={() => removeNodes(failedNodeKeys, "测试失败的")} disabled={testingNodeKeys.size > 0 || failedNodeKeys.size === 0} title="删除所有代理连通/延迟测试失败的节点">
                       <Trash2 size={15} />删除失败 ({failedNodeKeys.size})
                     </button>
-                    <button className="secondary-button compact-button" type="button" onClick={renameNodesByRegion} disabled={testingNodeKeys.size > 0} title="根据节点区域批量命名">
+                    <button className="secondary-button compact-button" type="button" onClick={renameNodesByRegion} disabled={testingNodeKeys.size > 0 || regionReadyRows.length === 0} title={regionReadyRows.length > 0 ? "根据已识别的节点区域批量命名" : "请先测试节点或手动填写区域"}>
                       <WandSparkles size={15} />按区域命名
                     </button>
                   </div>
