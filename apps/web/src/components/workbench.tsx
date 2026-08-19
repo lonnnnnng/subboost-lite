@@ -15,14 +15,17 @@ import {
   Eye,
   FileJson,
   FileUp,
+  Filter,
   Gauge,
   Github,
+  Globe2,
   Link2,
   LoaderCircle,
   Maximize2,
   Minimize2,
   Network,
   Plus,
+  Search,
   SlidersHorizontal,
   ShieldCheck,
   Trash2,
@@ -246,6 +249,29 @@ function nodeKey(sourceId: string, nodeIndex: number): string {
   return `${sourceId}:${nodeIndex}`;
 }
 
+function nodeIpForDedup(row: NodeRow): string | null {
+  const meta = (row.node as NodeWithMeta)._meta;
+  const egressIp = String(meta?.egressIp ?? "").trim();
+  if (egressIp) return egressIp.toLowerCase();
+
+  // long: 只有明确的字面 IP 才允许自动去重，域名可能解析到多个出口，不能把相同域名误判成同一节点。
+  const server = String(row.node.server ?? "").trim().replace(/^\[|\]$/g, "");
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(server)) return server.toLowerCase();
+  if (server.includes(":") && /^[0-9a-f:]+$/i.test(server)) return server.toLowerCase();
+  return null;
+}
+
+function matchesLatencyFilter(latency: number | null, filter: string): boolean {
+  if (filter === "all") return true;
+  if (latency === null) return false;
+  if (filter === "lt-1000") return latency < 1000;
+  if (filter === "lt-2000") return latency < 2000;
+  if (filter === "lt-3000") return latency < 3000;
+  if (filter === "gt-3000") return latency > 3000;
+  if (filter === "gt-5000") return latency > 5000;
+  return true;
+}
+
 const REGION_OPTIONS = ["香港", "澳门", "台湾", "日本", "韩国", "新加坡", "美国", "加拿大", "英国", "德国", "法国", "澳大利亚", "印度", "俄罗斯", "中国大陆", "其他", UNKNOWN_NODE_REGION];
 
 function getMatchingBuiltinTemplate(template: LiteTemplate): TemplateType | null {
@@ -368,6 +394,13 @@ export function Workbench() {
   const [previewTab, setPreviewTab] = useState<PreviewTab>("visual");
   const [busy, setBusy] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isNodeListFullscreen, setIsNodeListFullscreen] = useState(false);
+  const [nodeNameFilter, setNodeNameFilter] = useState("");
+  const [nodeIpFilter, setNodeIpFilter] = useState("");
+  const [nodeRegionFilter, setNodeRegionFilter] = useState("all");
+  const [nodeProtocolFilter, setNodeProtocolFilter] = useState("all");
+  const [nodeConnectivityFilter, setNodeConnectivityFilter] = useState("all");
+  const [nodeLatencyFilter, setNodeLatencyFilter] = useState("all");
   const [selectedNodeKeys, setSelectedNodeKeys] = useState<Set<string>>(() => new Set());
   const [testingNodeKeys, setTestingNodeKeys] = useState<Set<string>>(() => new Set());
   const [testingMode, setTestingMode] = useState<NodeTestMode | null>(null);
@@ -387,9 +420,17 @@ export function Workbench() {
   const yamlFileRef = useRef<HTMLInputElement>(null);
   const templateFileRef = useRef<HTMLInputElement>(null);
   const selectAllRef = useRef<HTMLInputElement>(null);
+  const nodeListRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const handleFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    const handleFullscreenChange = () => setIsFullscreen(document.fullscreenElement === document.documentElement);
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    handleFullscreenChange();
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => setIsNodeListFullscreen(Boolean(nodeListRef.current) && document.fullscreenElement === nodeListRef.current);
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     handleFullscreenChange();
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
@@ -424,17 +465,61 @@ export function Workbench() {
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
   }, [viewingNodeKey]);
-  const selectedRows = useMemo(
-    () => nodeRows.filter((row) => selectedNodeKeys.has(nodeKey(row.sourceId, row.nodeIndex))),
-    [nodeRows, selectedNodeKeys]
+  const regionFilterOptions = useMemo(() => [...new Set([
+    ...nodeRows.map((row) => detectNodeRegion(row.node)),
+    ...(nodeRegionFilter !== "all" ? [nodeRegionFilter] : []),
+  ])].sort((a, b) => a.localeCompare(b, "zh-CN")), [nodeRegionFilter, nodeRows]);
+  const protocolFilterOptions = useMemo(() => [...new Set([
+    ...nodeRows.map((row) => String(row.node.type ?? "").toLowerCase()).filter(Boolean),
+    ...(nodeProtocolFilter !== "all" ? [nodeProtocolFilter] : []),
+  ])].sort(), [nodeProtocolFilter, nodeRows]);
+  const visibleNodeRows = useMemo(() => {
+    const nameKeyword = nodeNameFilter.trim().toLowerCase();
+    const ipKeyword = nodeIpFilter.trim().toLowerCase();
+    return nodeRows.filter((row) => {
+      const meta = (row.node as NodeWithMeta)._meta;
+      const name = String(row.node.name ?? "").toLowerCase();
+      const egressIp = String(meta?.egressIp ?? "").toLowerCase();
+      const server = String(row.node.server ?? "").toLowerCase();
+      const region = detectNodeRegion(row.node);
+      const protocol = String(row.node.type ?? "").toLowerCase();
+      const connectivity = connectivityLabel(meta).label;
+      const latency = typeof meta?.latency === "number" && Number.isFinite(meta.latency) ? meta.latency : null;
+      if (nameKeyword && !name.includes(nameKeyword)) return false;
+      if (ipKeyword && !egressIp.includes(ipKeyword) && !server.includes(ipKeyword)) return false;
+      if (nodeRegionFilter !== "all" && region !== nodeRegionFilter) return false;
+      if (nodeProtocolFilter !== "all" && protocol !== nodeProtocolFilter) return false;
+      if (nodeConnectivityFilter !== "all" && connectivity !== nodeConnectivityFilter) return false;
+      return matchesLatencyFilter(latency, nodeLatencyFilter);
+    });
+  }, [nodeRows, nodeNameFilter, nodeIpFilter, nodeRegionFilter, nodeProtocolFilter, nodeConnectivityFilter, nodeLatencyFilter]);
+  const visibleSelectedRows = useMemo(
+    () => visibleNodeRows.filter((row) => selectedNodeKeys.has(nodeKey(row.sourceId, row.nodeIndex))),
+    [visibleNodeRows, selectedNodeKeys]
   );
   const failedNodeKeys = useMemo(() => new Set(nodeRows
     // long: 仅删除代理探测确认不可用的节点；内核不可用属于测试环境故障，不能据此批量清理用户节点。
     .filter((row) => (row.node as NodeWithMeta)._meta?.latencyTestStatus === "unavailable")
     .map((row) => nodeKey(row.sourceId, row.nodeIndex))), [nodeRows]);
+  const duplicateNodeKeys = useMemo(() => {
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    // long: 按当前列表顺序保留每个 IP 的第一条记录，后续重复项才进入待删除集合，确保结果可预期。
+    nodeRows.forEach((row) => {
+      const ip = nodeIpForDedup(row);
+      if (!ip) return;
+      const key = nodeKey(row.sourceId, row.nodeIndex);
+      if (seen.has(ip)) duplicates.add(key);
+      else seen.add(ip);
+    });
+    return duplicates;
+  }, [nodeRows]);
+  const mainlandNodeKeys = useMemo(() => new Set(nodeRows
+    .filter((row) => detectNodeRegion(row.node) === "中国大陆")
+    .map((row) => nodeKey(row.sourceId, row.nodeIndex))), [nodeRows]);
   const regionReadyRows = useMemo(() => nodeRows.filter((row) => detectNodeRegion(row.node) !== UNKNOWN_NODE_REGION), [nodeRows]);
-  const allNodesSelected = nodeRows.length > 0 && selectedRows.length === nodeRows.length;
-  const someNodesSelected = selectedRows.length > 0 && !allNodesSelected;
+  const allNodesSelected = visibleNodeRows.length > 0 && visibleSelectedRows.length === visibleNodeRows.length;
+  const someNodesSelected = visibleSelectedRows.length > 0 && !allNodesSelected;
   const allNodes = useMemo(() => nodeRows.map((row) => row.node), [nodeRows]);
   const output = useMemo(() => buildOutput(allNodes, template), [allNodes, template]);
   const matchingBuiltinTemplate = useMemo(() => getMatchingBuiltinTemplate(template), [template]);
@@ -557,7 +642,16 @@ export function Workbench() {
   }
 
   function toggleAllNodes(checked: boolean) {
-    setSelectedNodeKeys(checked ? new Set(nodeRows.map((row) => nodeKey(row.sourceId, row.nodeIndex))) : new Set());
+    setSelectedNodeKeys((current) => {
+      const next = new Set(current);
+      // long: 筛选后的全选只改变可见节点，避免用户看不到的节点被连带测试、测速或删除。
+      visibleNodeRows.forEach((row) => {
+        const key = nodeKey(row.sourceId, row.nodeIndex);
+        if (checked) next.add(key);
+        else next.delete(key);
+      });
+      return next;
+    });
   }
 
   function removeNodes(keys: Set<string>, targetLabel = "选中的") {
@@ -572,6 +666,23 @@ export function Workbench() {
       .filter((source) => source.nodes.length > 0));
     setSelectedNodeKeys(new Set());
     showNotice("ok", `已删除 ${keys.size} 个节点`);
+  }
+
+  function removeDuplicateNodes() {
+    removeNodes(duplicateNodeKeys, "重复 IP 节点");
+  }
+
+  function removeMainlandNodes() {
+    removeNodes(mainlandNodeKeys, "中国大陆");
+  }
+
+  function resetNodeFilters() {
+    setNodeNameFilter("");
+    setNodeIpFilter("");
+    setNodeRegionFilter("all");
+    setNodeProtocolFilter("all");
+    setNodeConnectivityFilter("all");
+    setNodeLatencyFilter("all");
   }
 
   function removeSource(sourceId: string) {
@@ -775,6 +886,18 @@ export function Workbench() {
       }
     } catch {
       showNotice("error", "当前浏览器不允许进入全屏");
+    }
+  }
+
+  async function toggleNodeListFullscreen() {
+    try {
+      if (document.fullscreenElement === nodeListRef.current) {
+        await document.exitFullscreen();
+      } else if (nodeListRef.current) {
+        await nodeListRef.current.requestFullscreen();
+      }
+    } catch {
+      showNotice("error", "当前浏览器不允许节点列表进入全屏");
     }
   }
 
@@ -1041,7 +1164,7 @@ export function Workbench() {
           <span><strong>{template.enabledModules.length}</strong> 模块</span>
         </div>
         <div className="topbar-actions">
-          <div className={`topbar-output-state ${output.error ? "is-error" : allNodes.length > 0 ? "is-ready" : "is-empty"}`} aria-live="polite">
+          <div className={`topbar-output-state ${output.error ? "is-error" : allNodes.length > 0 ? "is-ready" : ""}`} aria-live="polite">
             <i />
             <span>{output.error ? "配置有误" : allNodes.length > 0 ? "配置就绪" : "等待来源"}</span>
           </div>
@@ -1312,11 +1435,11 @@ export function Workbench() {
               </div>
             ) : null}
             {!output.error && allNodes.length > 0 && previewTab === "visual" ? (
-              <div className="node-list-view">
+              <div className="node-list-view" ref={nodeListRef}>
                 <div className="node-list-toolbar">
                   <div>
                     <strong>节点列表</strong>
-                    <span>{testingNodeKeys.size > 0 ? `正在${testingMode === "speed" ? "测速" : "测试连通性与延迟"} · ${testingNodeKeys.size} 个节点` : `名称与区域可直接编辑 · 选中 ${selectedRows.length} 个 · 横向滚动查看更多字段`}</span>
+                    <span>{testingNodeKeys.size > 0 ? `正在${testingMode === "speed" ? "测速" : "测试连通性与延迟"} · ${testingNodeKeys.size} 个节点` : `显示 ${visibleNodeRows.length} / ${nodeRows.length} 个 · 当前筛选内选中 ${visibleSelectedRows.length} 个`}</span>
                   </div>
                   <div className="node-list-actions">
                     <div className="node-test-group">
@@ -1328,7 +1451,7 @@ export function Workbench() {
                         }} />
                         <span>秒</span>
                       </label>
-                      <button className="secondary-button compact-button" type="button" onClick={() => void testRows(selectedRows, "latency")} disabled={testingNodeKeys.size > 0 || selectedRows.length === 0} title="测试选中节点的连通性和代理延迟">
+                      <button className="secondary-button compact-button" type="button" onClick={() => void testRows(visibleSelectedRows, "latency")} disabled={testingNodeKeys.size > 0 || visibleSelectedRows.length === 0} title="测试当前筛选中选中节点的连通性和代理延迟">
                         {testingNodeKeys.size > 0 && testingMode === "latency" ? <LoaderCircle className="spin" size={15} /> : <Activity size={15} />}连通/延迟
                       </button>
                     </div>
@@ -1365,11 +1488,11 @@ export function Workbench() {
                         </select>
                       </label>
                       {speedTestSource === "custom" ? <input className="node-test-custom-url" type="url" value={speedTestCustomUrl} placeholder="https://..." aria-label="自定义测速地址" onChange={(event) => setSpeedTestCustomUrl(event.target.value)} /> : null}
-                      <button className="secondary-button compact-button" type="button" onClick={() => void testRows(selectedRows, "speed")} disabled={testingNodeKeys.size > 0 || selectedRows.length === 0} title={`使用 ${speedTestConcurrency} 条并行下载流测试选中节点，采样上限 ${speedTestMaxDataMb} MB`}>
+                      <button className="secondary-button compact-button" type="button" onClick={() => void testRows(visibleSelectedRows, "speed")} disabled={testingNodeKeys.size > 0 || visibleSelectedRows.length === 0} title={`使用 ${speedTestConcurrency} 条并行下载流测试当前筛选中选中节点，采样上限 ${speedTestMaxDataMb} MB`}>
                         {testingNodeKeys.size > 0 && testingMode === "speed" ? <LoaderCircle className="spin" size={15} /> : <Gauge size={15} />}测速
                       </button>
                     </div>
-                    <button className="secondary-button compact-button danger-button" type="button" onClick={() => removeNodes(selectedNodeKeys)} disabled={testingNodeKeys.size > 0 || selectedRows.length === 0} title="删除选中的节点">
+                    <button className="secondary-button compact-button danger-button" type="button" onClick={() => removeNodes(new Set(visibleSelectedRows.map((row) => nodeKey(row.sourceId, row.nodeIndex))))} disabled={testingNodeKeys.size > 0 || visibleSelectedRows.length === 0} title="删除当前筛选中选中的节点">
                       <Trash2 size={15} />删除选中
                     </button>
                     <button className="secondary-button compact-button danger-button" type="button" onClick={() => removeNodes(failedNodeKeys, "测试失败的")} disabled={testingNodeKeys.size > 0 || failedNodeKeys.size === 0} title="删除所有代理连通/延迟测试失败的节点">
@@ -1378,7 +1501,31 @@ export function Workbench() {
                     <button className="secondary-button compact-button" type="button" onClick={renameNodesByRegion} disabled={testingNodeKeys.size > 0 || regionReadyRows.length === 0} title={regionReadyRows.length > 0 ? "根据已识别的节点区域批量命名" : "请先测试节点或手动填写区域"}>
                       <WandSparkles size={15} />按区域命名
                     </button>
+                    <button className="secondary-button compact-button" type="button" onClick={removeDuplicateNodes} disabled={testingNodeKeys.size > 0 || duplicateNodeKeys.size === 0} title={duplicateNodeKeys.size > 0 ? `同一 IP 只保留第一条，将删除 ${duplicateNodeKeys.size} 个节点` : "没有发现重复 IP 节点"}>
+                      <Filter size={15} />一键去重 ({duplicateNodeKeys.size})
+                    </button>
+                    <button className="secondary-button compact-button" type="button" onClick={removeMainlandNodes} disabled={testingNodeKeys.size > 0 || mainlandNodeKeys.size === 0} title={mainlandNodeKeys.size > 0 ? `移除 ${mainlandNodeKeys.size} 个中国大陆节点` : "没有区域为中国大陆的节点"}>
+                      <Globe2 size={15} />非大陆 ({mainlandNodeKeys.size})
+                    </button>
+                    <button className="icon-button compact" type="button" onClick={() => void toggleNodeListFullscreen()} title={isNodeListFullscreen ? "退出节点列表全屏" : "节点列表全屏"} aria-label={isNodeListFullscreen ? "退出节点列表全屏" : "节点列表全屏"}>
+                      {isNodeListFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                    </button>
                   </div>
+                </div>
+                <div className="node-filter-bar" aria-label="节点筛选">
+                  <div className="node-filter-search">
+                    <Search size={14} aria-hidden="true" />
+                    <input value={nodeNameFilter} onChange={(event) => setNodeNameFilter(event.target.value)} placeholder="按名称搜索" aria-label="按节点名称搜索" />
+                  </div>
+                  <div className="node-filter-search node-filter-ip">
+                    <Search size={14} aria-hidden="true" />
+                    <input value={nodeIpFilter} onChange={(event) => setNodeIpFilter(event.target.value)} placeholder="按 IP 搜索" aria-label="按 IP 搜索" />
+                  </div>
+                  <label className="node-filter-select"><span>区域</span><select value={nodeRegionFilter} onChange={(event) => setNodeRegionFilter(event.target.value)} aria-label="按区域筛选"><option value="all">全部</option>{regionFilterOptions.map((region) => <option key={region} value={region}>{region}</option>)}</select></label>
+                  <label className="node-filter-select"><span>协议</span><select value={nodeProtocolFilter} onChange={(event) => setNodeProtocolFilter(event.target.value)} aria-label="按协议筛选"><option value="all">全部</option>{protocolFilterOptions.map((protocol) => <option key={protocol} value={protocol}>{protocol.toUpperCase()}</option>)}</select></label>
+                  <label className="node-filter-select"><span>连通性</span><select value={nodeConnectivityFilter} onChange={(event) => setNodeConnectivityFilter(event.target.value)} aria-label="按连通性筛选"><option value="all">全部</option><option value="可用">可用</option><option value="测试失败">测试失败</option><option value="端口通">端口通</option><option value="不支持">不支持</option><option value="未测试">未测试</option></select></label>
+                  <label className="node-filter-select"><span>延迟</span><select value={nodeLatencyFilter} onChange={(event) => setNodeLatencyFilter(event.target.value)} aria-label="按延迟筛选"><option value="all">全部</option><option value="lt-1000">小于 1000ms</option><option value="lt-2000">小于 2000ms</option><option value="lt-3000">小于 3000ms</option><option value="gt-3000">大于 3000ms</option><option value="gt-5000">大于 5000ms</option></select></label>
+                  <button className="text-button node-filter-reset" type="button" onClick={resetNodeFilters} disabled={!nodeNameFilter && !nodeIpFilter && nodeRegionFilter === "all" && nodeProtocolFilter === "all" && nodeConnectivityFilter === "all" && nodeLatencyFilter === "all"} title="清空所有节点筛选">清空筛选</button>
                 </div>
                 <datalist id="node-region-options">
                   {REGION_OPTIONS.map((region) => <option key={region} value={region} />)}
@@ -1390,7 +1537,15 @@ export function Workbench() {
                       <span>#</span><span>节点名称</span><span>区域</span><span>协议</span><span>连通性</span><span>延迟</span><span>下载速度</span><span>服务器</span><span>来源</span><span>操作</span>
                     </div>
                     <div className="node-list-body">
-                      {nodeRows.map((row, index) => {
+                      {visibleNodeRows.length === 0 ? (
+                        <div className="node-filter-empty">
+                          <Filter size={20} />
+                          <strong>没有匹配的节点</strong>
+                          <span>调整筛选条件，或清空筛选后查看全部节点。</span>
+                          <button className="secondary-button compact-button" type="button" onClick={resetNodeFilters}>清空筛选</button>
+                        </div>
+                      ) : null}
+                      {visibleNodeRows.map((row, index) => {
                         const key = nodeKey(row.sourceId, row.nodeIndex);
                         const meta = (row.node as NodeWithMeta)._meta;
                         const connectivity = connectivityLabel(meta);

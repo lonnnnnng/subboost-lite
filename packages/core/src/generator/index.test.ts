@@ -44,7 +44,7 @@ describe("generateClashConfig", () => {
           "    - existing.example.com",
           "  nameserver-policy:",
           "    '+.existing.example.com': 1.1.1.1",
-        ].join("\\n"),
+        ].join("\n"),
         internalDomains: [
           { domain: "*.Corp.Example.com", nameservers: ["10.0.0.53", "10.0.0.54"] },
           { domain: "corp.example.com", nameservers: ["10.0.0.53"] },

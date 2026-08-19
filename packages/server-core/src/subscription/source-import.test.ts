@@ -242,7 +242,7 @@ describe("importSubscriptionFromUrl", () => {
         url: "https://example.com/sub.yaml",
         userinfoUrl: "not a url",
       },
-      { fetchText }
+      { fetchText, userAgents: ["single"] }
     );
 
     expect(result.ok).toBe(true);
