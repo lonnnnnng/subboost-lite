@@ -26,6 +26,7 @@ import type {
   ClashConfig,
   CustomProxyGroup,
   CustomRuleSet,
+  DirectDomainRule,
   GroupListenerBinding,
   InternalDomainRule,
   ProxyGroup,
@@ -143,16 +144,41 @@ function normalizeBaseConfigPatch(baseConfig: Record<string, unknown>): Record<s
   };
 }
 
+function normalizeDomainName(value: unknown): string {
+  const rawDomain = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return rawDomain.replace(/^(?:\*\.|\+\.)+/, "").replace(/\.+$/, "");
+}
+
+function isValidDomainName(domain: string): boolean {
+  return Boolean(domain)
+    && domain.length <= 253
+    && /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(domain);
+}
+
+function normalizeDirectDomains(value: unknown): DirectDomainRule[] {
+  if (!Array.isArray(value)) return [];
+  const result = new Map<string, DirectDomainRule>();
+  for (const item of value) {
+    const domain = normalizeDomainName(isPlainObject(item) ? item.domain : item);
+    if (!isValidDomainName(domain)) continue;
+    const nameservers = isPlainObject(item) && Array.isArray(item.nameservers)
+      ? [...new Set(item.nameservers.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean))]
+      : [];
+    const existing = result.get(domain);
+    result.set(domain, { domain, nameservers: [...new Set([...(existing?.nameservers ?? []), ...nameservers])] });
+  }
+  return [...result.values()];
+}
+
 function normalizeInternalDomains(value: unknown): InternalDomainRule[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   const result: InternalDomainRule[] = [];
   for (const item of value) {
     if (!isPlainObject(item)) continue;
-    const rawDomain = typeof item.domain === "string" ? item.domain.trim().toLowerCase() : "";
-    const domain = rawDomain.replace(/^(?:\*\.|\+\.)+/, "").replace(/\.+$/, "");
+    const domain = normalizeDomainName(item.domain);
     // long: 只接受普通 DNS 域名，避免把 YAML 通配符、路径或控制字符写入路由规则。
-    if (!domain || domain.length > 253 || !/^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(domain)) continue;
+    if (!isValidDomainName(domain)) continue;
     if (seen.has(domain)) continue;
     const nameservers = Array.isArray(item.nameservers)
       ? [...new Set(item.nameservers.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean))]
@@ -164,18 +190,27 @@ function normalizeInternalDomains(value: unknown): InternalDomainRule[] {
   return result;
 }
 
-function mergeInternalDomainDns(basePatch: Record<string, unknown>, internalDomains: unknown): Record<string, unknown> {
-  const domains = normalizeInternalDomains(internalDomains);
-  if (domains.length === 0) return basePatch;
+function mergeDirectDomainDns(basePatch: Record<string, unknown>, directDomains: unknown, legacyInternalDomains: unknown): Record<string, unknown> {
+  const domains = [
+    ...normalizeDirectDomains(directDomains),
+    ...normalizeInternalDomains(legacyInternalDomains).map((item) => ({ domain: item.domain, nameservers: item.nameservers })),
+  ];
+  const mergedDomains = new Map<string, DirectDomainRule>();
+  for (const item of domains) {
+    const existing = mergedDomains.get(item.domain);
+    mergedDomains.set(item.domain, { domain: item.domain, nameservers: [...new Set([...(existing?.nameservers ?? []), ...(item.nameservers ?? [])])] });
+  }
+  const dnsDomains = [...mergedDomains.values()].filter((item) => (item.nameservers ?? []).length > 0);
+  if (dnsDomains.length === 0) return basePatch;
   const baseDns = basePatch.dns === undefined ? {} : basePatch.dns;
-  if (!isPlainObject(baseDns)) throw new BaseConfigYamlError("基础和 DNS 配置中的 dns 必须是对象，才能添加内网域名策略。");
+  if (!isPlainObject(baseDns)) throw new BaseConfigYamlError("基础和 DNS 配置中的 dns 必须是对象，才能添加直连域名专用 DNS 策略。");
   const existingFilter = Array.isArray(baseDns["fake-ip-filter"])
     ? baseDns["fake-ip-filter"].filter((entry): entry is string => typeof entry === "string")
     : [];
   const existingPolicy = isPlainObject(baseDns["nameserver-policy"]) ? baseDns["nameserver-policy"] : {};
   const fakeIpFilter = [...existingFilter];
   const nameserverPolicy: Record<string, unknown> = { ...existingPolicy };
-  for (const item of domains) {
+  for (const item of dnsDomains) {
     for (const pattern of [item.domain, `*.${item.domain}`]) {
       if (!fakeIpFilter.includes(pattern)) fakeIpFilter.push(pattern);
     }
@@ -420,8 +455,9 @@ export function generateClashConfig(options: GenerateOptions): ClashConfig {
     allowLan: config.allowLan,
   }) as Record<string, unknown>;
 
-  const baseTopLevelPatch = mergeInternalDomainDns(
+  const baseTopLevelPatch = mergeDirectDomainDns(
     shouldUseDefaultBaseSections ? defaultBaseConfigPatch : normalizeBaseConfigPatch(baseConfigRecord),
+    config.directDomains,
     config.internalDomains
   );
 
@@ -619,7 +655,12 @@ export function generateClashConfig(options: GenerateOptions): ClashConfig {
     availablePolicyTargets,
     fallbackPolicyTarget,
   });
-  const internalRules = normalizeInternalDomains(config.internalDomains).map((item) => `DOMAIN-SUFFIX,${item.domain},DIRECT`);
+  // long: 所有直连域名统一先命中 DIRECT；填写专用 DNS 的项目同时在上方生成 Fake-IP 排除和 nameserver-policy。
+  const directDomainRules = [
+    ...normalizeDirectDomains(config.directDomains),
+    ...normalizeInternalDomains(config.internalDomains).map((item) => ({ domain: item.domain, nameservers: item.nameservers })),
+  ];
+  const directRules = [...new Set(directDomainRules.map((item) => `DOMAIN-SUFFIX,${item.domain},DIRECT`))];
 
   const clashConfig: Record<string, unknown> = {
     // 基础配置 patch：显式 YAML 按用户输入透传；未传入 YAML 时补默认基础段。
@@ -642,7 +683,7 @@ export function generateClashConfig(options: GenerateOptions): ClashConfig {
     
     // 规则（包含自定义分流组的规则）
     // long: 内网直连必须先于代理规则命中，否则会被 geosite/global 等宽规则提前接管。
-    rules: [...new Set([...internalRules, ...generatedRules])],
+    rules: [...new Set([...directRules, ...generatedRules])],
   };
 
   return clashConfig as unknown as ClashConfig;

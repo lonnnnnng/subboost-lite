@@ -60,6 +60,41 @@ describe("generateClashConfig", () => {
     expect(config.rules?.[0]).toBe("DOMAIN-SUFFIX,corp.example.com,DIRECT");
   });
 
+  it("adds ordinary direct domains without changing Fake-IP or DNS policy", () => {
+    const config = generateClashConfig({
+      nodes: [ssNode()],
+      userConfig: {
+        dnsYaml: "",
+        directDomains: ["Baidu.com", "*.example.org", "baidu.com", "https://invalid.example"],
+      },
+    });
+
+    expect(config.rules?.slice(0, 2)).toEqual([
+      "DOMAIN-SUFFIX,baidu.com,DIRECT",
+      "DOMAIN-SUFFIX,example.org,DIRECT",
+    ]);
+    expect(config.dns).toBeUndefined();
+  });
+
+  it("supports optional DNS on the unified direct-domain entries", () => {
+    const config = generateClashConfig({
+      nodes: [ssNode()],
+      userConfig: {
+        directDomains: [
+          { domain: "corp.example.com", nameservers: ["10.0.0.53"] },
+          { domain: "public.example.com" },
+        ],
+      },
+    });
+
+    expect(config.rules?.slice(0, 2)).toEqual([
+      "DOMAIN-SUFFIX,corp.example.com,DIRECT",
+      "DOMAIN-SUFFIX,public.example.com,DIRECT",
+    ]);
+    expect(config.dns?.["fake-ip-filter"]).toEqual(expect.arrayContaining(["corp.example.com", "*.corp.example.com"]));
+    expect(config.dns?.["nameserver-policy"]).toEqual({ "+.corp.example.com": ["10.0.0.53"] });
+  });
+
   it("deduplicates proxy names and filters nodes unsupported by Mihomo", () => {
     const config = generateClashConfig({
       nodes: [

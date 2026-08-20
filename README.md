@@ -32,7 +32,7 @@ SubConvert Lite 面向只需要“导入节点 -> 选择规则 -> 生成配置�
 | 证书异常 | 证书过期、主机名不匹配时进入人工审核，可切换 Base64 原文与解码明文 |
 | 规则模板 | 轻量、日常、高级三套预设；模块、AI、广告、国内规则均可调整；模板名称由预设自动管理 |
 | 模板文件 | `subconvert-template/v1` JSON 导入与导出 |
-| 内网域名 | 同时生成 `fake-ip-filter`、`nameserver-policy` 和 `DOMAIN-SUFFIX,...,DIRECT` |
+| 域名直连 | 统一配置域名直连；专用 DNS 可选，不填只生成 `DOMAIN-SUFFIX,...,DIRECT`，填写后额外生成 `fake-ip-filter` 和 `nameserver-policy` |
 | 节点管理 | 名称和区域可编辑，支持按出口区域批量命名、按服务器 IP 去重和移除大陆节点 |
 | 连通/延迟 | 真实 TCP 与 Mihomo 代理测试，最多 6 个独立 worker 并行，结果逐节点实时显示 |
 | 出口区域 | 请求实际经过被测节点，多个公网 IP 服务投票，不根据节点名称或入口 IP 猜测 |
@@ -72,7 +72,7 @@ SubConvert Lite 面向只需要“导入节点 -> 选择规则 -> 生成配置�
 - 按核心、服务、社交、媒体、游戏、技术、金融等分类选择规则模块。
 - 在页面内菜单中选择 GitHub Raw、jsDelivr、jsDelivr CF 或自定义 URL 前缀作为规则集下载源。
 - 选择 AI 规则细分/聚合、轻量/AdRules 广告策略和国内域名增强。
-- 通过“内网域名”同时配置域名、专用 DNS 和直连规则，满足公司内网访问场景。
+- 在“直连域名”中逐条填写域名；公网站点只填 `baidu.com`，公司内网域名在同一行补充专用 DNS，即可同时生成直连规则和 Fake-IP/DNS 策略。
 - 导入或导出 JSON 模板，复用个人规则组合。
 
 当前内置规则主要来自 [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat)，增强广告规则可选用 [AdRules](https://adrules.top/)。

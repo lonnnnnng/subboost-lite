@@ -200,7 +200,9 @@ export interface UserConfig {
   
   // DNS 设置 (YAML 文本)
   dnsYaml: string;
-  // long: 结构化声明公司/家庭内网域名，生成器会同步写入 Fake-IP 过滤、域名 DNS 策略和直连规则。
+  // long: 统一声明直连域名；nameservers 为空时只生成直连规则，填写后额外生成内网 DNS 策略。
+  directDomains?: Array<DirectDomainRule | string>;
+  // long: 兼容旧版模板的内网域名字段，新模板不再生成该字段。
   internalDomains?: InternalDomainRule[];
   
   // 其他
@@ -214,6 +216,11 @@ export interface UserConfig {
 export interface InternalDomainRule {
   domain: string;
   nameservers: string[];
+}
+
+export interface DirectDomainRule {
+  domain: string;
+  nameservers?: string[];
 }
 
 export interface CustomRule {

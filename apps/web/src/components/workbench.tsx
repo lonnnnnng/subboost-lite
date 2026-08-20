@@ -38,7 +38,7 @@ import { generateClashConfig, generateClashYaml } from "@subboost/core/generator
 import { PROXY_GROUP_MODULES } from "@subboost/core/generator/proxy-groups";
 import { parseBase64, parseSubscription } from "@subboost/core/parser";
 import { RULE_PROVIDER_SOURCES } from "@subboost/core/rules/metadata";
-import type { BuiltinRuleEdits, ClashConfig, InternalDomainRule, TemplateType } from "@subboost/core/types/config";
+import type { BuiltinRuleEdits, ClashConfig, DirectDomainRule, TemplateType } from "@subboost/core/types/config";
 import type { NodeWithMeta, ParsedNode } from "@subboost/core/types/node";
 import { YamlHighlight } from "@/components/yaml-highlight";
 import {
@@ -176,7 +176,7 @@ function buildOutput(nodes: ParsedNode[], template: LiteTemplate) {
       testInterval: template.testInterval,
       ruleProviderBaseUrl: template.ruleProviderBaseUrl,
       experimentalCnUseCnRuleSet: template.experimentalCnUseCnRuleSet,
-      internalDomains: template.internalDomains,
+      directDomains: template.directDomains,
       ...(template.baseConfigYaml.trim() ? { dnsYaml: template.baseConfigYaml } : {}),
     };
     const builtinRuleEdits: BuiltinRuleEdits = template.aiRuleMode === "split"
@@ -641,7 +641,7 @@ export function Workbench() {
     .filter((module) => template.enabledModules.includes(module.id))
     .reduce((total, module) => total + module.rules.length, 0) +
     (template.adRuleMode === "enhanced" && template.enabledModules.includes("ad") ? 1 : 0) +
-    template.internalDomains.length;
+    template.directDomains.length;
   const categories = [...new Set(PROXY_GROUP_MODULES.map((module) => module.category))];
   const providerSourceId = getProviderSourceId(template.ruleProviderBaseUrl);
   const decodedReviewContent = useMemo(
@@ -1255,24 +1255,21 @@ export function Workbench() {
     setTemplate(createBuiltinTemplate(type));
   }
 
-  function addInternalDomain() {
+  function addDirectDomain() {
+    setTemplate((current) => ({ ...current, directDomains: [...current.directDomains, { domain: "", nameservers: [] }] }));
+  }
+
+  function updateDirectDomain(index: number, patch: Partial<DirectDomainRule>) {
     setTemplate((current) => ({
       ...current,
-      internalDomains: [...current.internalDomains, { domain: "", nameservers: [] }],
+      directDomains: current.directDomains.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
     }));
   }
 
-  function updateInternalDomain(index: number, patch: Partial<InternalDomainRule>) {
+  function removeDirectDomain(index: number) {
     setTemplate((current) => ({
       ...current,
-      internalDomains: current.internalDomains.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
-    }));
-  }
-
-  function removeInternalDomain(index: number) {
-    setTemplate((current) => ({
-      ...current,
-      internalDomains: current.internalDomains.filter((_, itemIndex) => itemIndex !== index),
+      directDomains: current.directDomains.filter((_, itemIndex) => itemIndex !== index),
     }));
   }
 
@@ -1530,35 +1527,35 @@ export function Workbench() {
                 <label><span>Mixed 端口</span><input className="form-control" type="number" min="1" max="65535" value={template.mixedPort} onChange={(event) => setTemplate((current) => ({ ...current, mixedPort: Number(event.target.value) }))} /></label>
                 <label className="switch-field"><span>允许局域网</span><input type="checkbox" checked={template.allowLan} onChange={(event) => setTemplate((current) => ({ ...current, allowLan: event.target.checked }))} /><i /></label>
               </div>
-              <div className="internal-domain-settings">
+              <div className="direct-domain-settings">
                 <div className="internal-domain-heading">
                   <div>
-                    <span className="field-label">内网域名直连</span>
-                    <small>生成 Fake-IP 过滤、指定 DNS 和 DOMAIN-SUFFIX 直连规则</small>
+                    <span className="field-label">直连域名</span>
+                    <small>域名必填，专用 DNS 可选；不填 DNS 只生成直连规则，填写后会额外绕过 Fake-IP 并使用指定解析。</small>
                   </div>
-                  <button className="secondary-button compact-button" type="button" onClick={addInternalDomain}><Plus size={14} />添加域名</button>
+                  <button className="secondary-button compact-button" type="button" onClick={addDirectDomain}><Plus size={14} />添加域名</button>
                 </div>
-                {template.internalDomains.length === 0 ? (
-                  <div className="internal-domain-empty">暂无内网域名，留空不改变默认 DNS 行为。</div>
+                {template.directDomains.length === 0 ? (
+                  <div className="internal-domain-empty">暂无直连域名，例如添加 baidu.com 后，该域名及其子域名会跳过代理。</div>
                 ) : (
                   <div className="internal-domain-list">
-                    {template.internalDomains.map((item, index) => (
-                      <div className="internal-domain-row" key={`internal-domain-${index}`}>
+                    {template.directDomains.map((item, index) => (
+                      <div className="internal-domain-row direct-domain-row" key={`direct-domain-${index}`}>
                         <input
                           className="form-control"
                           value={item.domain}
-                          onChange={(event) => updateInternalDomain(index, { domain: event.target.value })}
-                          placeholder="例如 intranet.example.com"
-                          aria-label={`内网域名 ${index + 1}`}
+                          onChange={(event) => updateDirectDomain(index, { domain: event.target.value })}
+                          placeholder="例如 baidu.com"
+                          aria-label={`直连域名 ${index + 1}`}
                         />
                         <input
                           className="form-control"
-                          value={item.nameservers.join(", ")}
-                          onChange={(event) => updateInternalDomain(index, { nameservers: event.target.value.split(/[\\s,;，；]+/).map((entry) => entry.trim()).filter(Boolean) })}
-                          placeholder="DNS 地址，逗号分隔"
-                          aria-label={`内网域名 ${index + 1} 的 DNS 地址`}
+                          value={(item.nameservers ?? []).join(", ")}
+                          onChange={(event) => updateDirectDomain(index, { nameservers: event.target.value.split(/[\\s,;，；]+/).map((entry) => entry.trim()).filter(Boolean) })}
+                          placeholder="专用 DNS（可选），逗号分隔"
+                          aria-label={`直连域名 ${index + 1} 的专用 DNS 地址`}
                         />
-                        <button className="icon-button compact" type="button" title="删除内网域名" onClick={() => removeInternalDomain(index)}><Trash2 size={14} /></button>
+                        <button className="icon-button compact" type="button" title="删除直连域名" onClick={() => removeDirectDomain(index)}><Trash2 size={14} /></button>
                       </div>
                     ))}
                   </div>
