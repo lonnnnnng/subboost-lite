@@ -15,8 +15,8 @@ export const RULE_PROVIDER_SOURCES = {
 
 export type RuleProviderSourceId = keyof typeof RULE_PROVIDER_SOURCES;
 
-// long: 国内网络优先使用 CDN，保留 GitHub Raw 与 CF 镜像，便于在不同网络环境下切换。
-export const DEFAULT_RULE_PROVIDER_SOURCE: RuleProviderSourceId = "jsdelivr";
+// long: 默认使用官方 GitHub Raw，其他 CDN 镜像仍保留为可切换的备用来源。
+export const DEFAULT_RULE_PROVIDER_SOURCE: RuleProviderSourceId = "github";
 
 export const RULE_PROVIDER_CONFIG = {
   baseUrl: RULE_PROVIDER_SOURCES[DEFAULT_RULE_PROVIDER_SOURCE].baseUrl,

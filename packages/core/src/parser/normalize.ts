@@ -76,11 +76,27 @@ export function normalizeParseResult(result: ParseResult, priorErrors: string[] 
       placeholderFiltered.filteredCount > 0 ? [CLIENT_UPDATE_PLACEHOLDER_ERROR] : []
     )
   );
+  const directDomains = result.directDomains?.reduce<NonNullable<ParseResult["directDomains"]>>((items, item) => {
+    const domain = typeof item?.domain === "string" ? item.domain.trim().toLowerCase() : "";
+    if (!domain) return items;
+    const nameservers = Array.isArray(item.nameservers)
+      ? [...new Set(item.nameservers.filter((entry): entry is string => typeof entry === "string").map((entry) => entry.trim()).filter(Boolean))]
+      : [];
+    const existing = items.find((entry) => entry.domain === domain);
+    if (existing) {
+      existing.nameservers = [...new Set([...(existing.nameservers ?? []), ...nameservers])];
+    } else {
+      items.push({ domain, ...(nameservers.length > 0 ? { nameservers } : {}) });
+    }
+    return items;
+  }, []);
 
   return {
     nodes: deduped.nodes,
     errors,
     totalParsed: deduped.nodes.length,
     totalFailed: errors.length,
+    ...(directDomains && directDomains.length > 0 ? { directDomains } : {}),
+    ...(typeof result.baseConfigYaml === "string" && result.baseConfigYaml.trim() ? { baseConfigYaml: result.baseConfigYaml.trim() } : {}),
   };
 }

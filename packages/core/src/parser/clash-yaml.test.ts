@@ -4,6 +4,54 @@ import { parseClashYaml } from "./clash-yaml";
 const REALITY_PUBLIC_KEY = "A".repeat(43);
 
 describe("parseClashYaml", () => {
+  it("keeps DIRECT domain rules and their nameserver policies when importing a full config", () => {
+    const result = parseClashYaml(`
+mixed-port: 7897
+proxy-providers:
+  remote:
+    type: http
+    url: https://example.com/provider.yaml
+dns:
+  nameserver-policy:
+    "+.corp.example.com": [10.0.0.53, https://dns.corp.example.com/dns-query]
+    "host.example.net": 10.0.0.54
+rules:
+  - DOMAIN-SUFFIX,corp.example.com,DIRECT
+  - DOMAIN,host.example.net,DIRECT
+  - DOMAIN-SUFFIX,proxied.example.com,PROXY
+proxies:
+  - name: YAML node
+    type: ss
+    server: yaml.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: secret
+`);
+
+    expect(result.directDomains).toEqual([
+      { domain: "corp.example.com", nameservers: ["10.0.0.53", "https://dns.corp.example.com/dns-query"] },
+      { domain: "host.example.net", nameservers: ["10.0.0.54"] },
+    ]);
+    expect(result.baseConfigYaml).toContain("mixed-port: 7897");
+    expect(result.baseConfigYaml).toContain("dns:");
+    expect(result.baseConfigYaml).toContain("proxy-providers:");
+    expect(result.baseConfigYaml).not.toContain("proxies:");
+    expect(result.baseConfigYaml).not.toContain("rules:");
+  });
+
+  it("accepts a base-only Mihomo YAML without inventing a missing-node error", () => {
+    const result = parseClashYaml(`
+dns:
+  enable: true
+tun:
+  enable: true
+`);
+
+    expect(result.nodes).toEqual([]);
+    expect(result.errors).toEqual([]);
+    expect(result.baseConfigYaml).toContain("tun:");
+  });
+
   it("parses full Clash YAML with common and newer proxy types", () => {
     const result = parseClashYaml(`
 proxy-providers:
@@ -102,7 +150,7 @@ proxies:
 `);
 
     expect(result.totalParsed).toBe(14);
-    expect(result.errors).toEqual(["检测到 proxy-providers 配置，由于浏览器限制无法自动拉取，请直接粘贴节点内容"]);
+    expect(result.errors).toEqual(["检测到 proxy-providers 配置，已保留到基础配置；浏览器不会自动拉取其中的节点"]);
     expect(result.nodes.find((node) => node.name === "SS")).toMatchObject({
       type: "ss",
       plugin: "obfs",

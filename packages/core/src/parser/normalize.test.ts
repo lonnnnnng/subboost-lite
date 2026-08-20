@@ -51,4 +51,21 @@ describe("parse result normalization", () => {
     expect(result.totalParsed).toBe(2);
     expect(result.totalFailed).toBe(2);
   });
+
+  it("preserves and deduplicates direct-domain metadata", () => {
+    const result = normalizeParseResult({
+      nodes: [node("A")],
+      errors: [],
+      totalParsed: 1,
+      totalFailed: 0,
+      directDomains: [
+        { domain: " Corp.Example.com ", nameservers: ["10.0.0.53", "10.0.0.53"] },
+        { domain: "corp.example.com", nameservers: ["10.0.0.54"] },
+      ],
+    });
+
+    expect(result.directDomains).toEqual([
+      { domain: "corp.example.com", nameservers: ["10.0.0.53", "10.0.0.54"] },
+    ]);
+  });
 });

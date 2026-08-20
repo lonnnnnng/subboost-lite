@@ -60,8 +60,9 @@ SubConvert Lite 面向只需要“导入节点 -> 选择规则 -> 生成配置�
 ### 1. 导入来源
 
 - **订阅链接**：每行一个链接，也可一次选择多个文本文件并按选择顺序追加；默认 10 个 worker 并发执行，来源面板会实时显示已完成、处理中、排队、成功、失败和待审核数量。
-- **YAML 配置**：支持粘贴或选择本地 `.yaml` / `.yml` 文件。
+- **YAML 配置**：支持粘贴或选择本地 `.yaml` / `.yml` 文件。完整 Clash / Mihomo YAML 导入后，会自动把未由转换器重建的基础配置（例如端口、DNS、Fake-IP、TUN、嗅探、hosts、profile、geodata、listeners、proxy-providers 及未来的扩展字段）带入“基础配置 / DNS YAML”中继续编辑；`proxies`、`proxy-groups`、`rule-providers`、`rules` 由当前模板和节点重新生成，其中 `DOMAIN/DOMAIN-SUFFIX,...,DIRECT` 会转换为直连域名设置。
 - **节点连接**：支持常见的 SS、SSR、VMess、VLESS、Trojan、Hysteria、TUIC、AnyTLS、WireGuard 等格式。
+- 节点列表支持按选中项或全部节点导出为可复用 YAML；导出的 `proxies` 配置可以重新粘贴到“节点连接”来源中解析。
 
 服务端会并行尝试 `v2rayN` 和 `mihomo` User-Agent，以兼容不同订阅端点；必要时再补充浏览器 User-Agent。每条链接取得并发槽后才开始计算 15 秒超时，排队等待不会消耗该链接的超时窗口；单条订阅超时也不会阻塞同批其他链接。
 
@@ -70,8 +71,9 @@ SubConvert Lite 面向只需要“导入节点 -> 选择规则 -> 生成配置�
 - 使用轻量、日常、高级预设快速开始。
 - 模板名称随内置预设自动管理，界面聚焦规则选择，不需要手动维护名称。
 - 按核心、服务、社交、媒体、游戏、技术、金融等分类选择规则模块。
-- 在页面内菜单中选择 GitHub Raw、jsDelivr、jsDelivr CF 或自定义 URL 前缀作为规则集下载源。
-- 选择 AI 规则细分/聚合、轻量/AdRules 广告策略和国内域名增强。
+- 默认使用 GitHub Raw；也可在页面内菜单中切换 jsDelivr、jsDelivr CF 或自定义 URL 前缀作为规则集下载源。
+- 选择 AI 规则细分/聚合、轻量/AdRules 广告策略和完整国内域名规则。
+- 基础配置支持恢复当前预设默认值（不会清空已导入节点），并可打开约 20 行高度的 YAML 语法高亮预览。
 - 在“直连域名”中逐条填写域名；公网站点只填 `baidu.com`，公司内网域名在同一行补充专用 DNS，即可同时生成直连规则和 Fake-IP/DNS 策略。
 - 导入或导出 JSON 模板，复用个人规则组合。
 

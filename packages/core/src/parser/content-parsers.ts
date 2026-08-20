@@ -80,7 +80,7 @@ function looksLikeInlineFlowProxyList(content: string): boolean {
 }
 
 export function isClashYamlContent(content: string): boolean {
-  if (/^(?:[ \t]*)(?:proxies|proxy-groups|proxy-providers)[ \t]*:/m.test(content)) {
+  if (/^(?:[ \t]*)(?:proxies|proxy-groups|proxy-providers|rule-providers|rules|dns|tun|sniffer|profile|listeners|mixed-port|allow-lan|mode|log-level)[ \t]*:/m.test(content)) {
     return true;
   }
 
@@ -184,7 +184,8 @@ export function parseSubscriptionContentByRegistry(content: string): ParseResult
       if (parser.name === "link-lines") {
         return buildParseResult(result.nodes, [...accumulatedErrors, ...result.errors]);
       }
-      if (result.nodes.length > 0) return result;
+      // long: 纯基础配置 YAML 可能没有 proxies，但仍应保留 dns/tun/sniffer 等配置，不能继续落到节点链接解析器后丢失。
+      if (result.nodes.length > 0 || result.baseConfigYaml) return result;
       accumulatedErrors.push(...result.errors);
     } catch (error) {
       if (parser.name === "clash-yaml") {
@@ -197,4 +198,3 @@ export function parseSubscriptionContentByRegistry(content: string): ParseResult
 
   return buildParseResult([], accumulatedErrors);
 }
-

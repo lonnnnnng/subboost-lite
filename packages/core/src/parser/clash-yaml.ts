@@ -19,6 +19,95 @@ interface ClashConfig {
   [key: string]: unknown;
 }
 
+const GENERATED_CONFIG_KEYS = new Set(["proxies", "proxy-groups", "rule-providers", "rules"]);
+const FULL_CONFIG_MARKERS = new Set([
+  "proxies", "proxy-groups", "proxy-providers", "rule-providers", "rules", "dns", "tun", "sniffer", "profile",
+  "listeners", "mixed-port", "socks-port", "redir-port", "tproxy-port", "allow-lan", "mode", "log-level", "ipv6",
+]);
+
+type DirectDomainMetadata = NonNullable<ParseResult["directDomains"]>[number];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeDomainForMetadata(value: string): string {
+  return value.trim().toLowerCase().replace(/^(?:\*\.|\+\.)+/, "").replace(/\.+$/, "");
+}
+
+function isDomainForMetadata(value: string): boolean {
+  return /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(value);
+}
+
+function nameserversFromPolicy(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : [value];
+  return [...new Set(values.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
+}
+
+function collectNameserverPolicies(config: ClashConfig): Map<string, string[]> {
+  const policies = new Map<string, string[]>();
+  const addPolicies = (value: unknown) => {
+    if (!isRecord(value)) return;
+    for (const [rawKey, rawValue] of Object.entries(value)) {
+      const key = normalizeDomainForMetadata(rawKey);
+      if (!isDomainForMetadata(key)) continue;
+      const nameservers = nameserversFromPolicy(rawValue);
+      if (nameservers.length === 0) continue;
+      policies.set(key, [...new Set([...(policies.get(key) ?? []), ...nameservers])]);
+    }
+  };
+
+  addPolicies(config["nameserver-policy"]);
+  if (isRecord(config.dns)) addPolicies(config.dns["nameserver-policy"]);
+  return policies;
+}
+
+function findNameserversForDomain(domain: string, policies: Map<string, string[]>): string[] {
+  const labels = domain.split(".");
+  const nameservers: string[] = [];
+  // long: 先取精确策略，再按父域逐级匹配 +.domain，确保 YAML 中的专用 DNS 能覆盖其子域名。
+  for (let index = 0; index < labels.length - 1; index += 1) {
+    const candidate = labels.slice(index).join(".");
+    nameservers.push(...(policies.get(candidate) ?? []));
+  }
+  return [...new Set(nameservers)];
+}
+
+function extractDirectDomains(config: ClashConfig): DirectDomainMetadata[] {
+  const policies = collectNameserverPolicies(config);
+  const domains = new Map<string, DirectDomainMetadata>();
+
+  for (const rawRule of Array.isArray(config.rules) ? config.rules : []) {
+    if (typeof rawRule !== "string") continue;
+    const parts = rawRule.split(",").map((part) => part.trim());
+    const kind = (parts[0] ?? "").toUpperCase();
+    const domain = normalizeDomainForMetadata(parts[1] ?? "");
+    const target = (parts[2] ?? "").toUpperCase();
+    if (!((kind === "DOMAIN" || kind === "DOMAIN-SUFFIX") && target === "DIRECT")) continue;
+    if (!isDomainForMetadata(domain) || domains.has(domain)) continue;
+    domains.set(domain, { domain, nameservers: findNameserversForDomain(domain, policies) });
+  }
+
+  // long: 有些现有配置只写 nameserver-policy + fake-ip-filter，没有重复写 DOMAIN-SUFFIX；这些域名同样属于用户明确维护的直连解析范围。
+  for (const [domain, nameservers] of policies) {
+    if (!domains.has(domain)) domains.set(domain, { domain, nameservers });
+  }
+
+  return [...domains.values()];
+}
+
+function looksLikeFullClashConfig(config: Record<string, unknown>): boolean {
+  return Object.keys(config).some((key) => FULL_CONFIG_MARKERS.has(key));
+}
+
+function extractBaseConfigYaml(config: ClashConfig): string | undefined {
+  if (!looksLikeFullClashConfig(config)) return undefined;
+  const baseConfig = Object.fromEntries(Object.entries(config).filter(([key]) => !GENERATED_CONFIG_KEYS.has(key)));
+  if (Object.keys(baseConfig).length === 0) return undefined;
+  // long: 仅移除由节点、代理组和规则生成器负责的四个段，其他已知或未来 Mihomo 字段都保留，避免导入时静默丢配置。
+  return yaml.dump(baseConfig, { noRefs: true, lineWidth: -1, sortKeys: false }).trim();
+}
+
 function applyWsEarlyDataInPlace(node: Record<string, unknown>) {
   if (String(node.network ?? "") !== "ws") return;
   const wsOpts = node["ws-opts"];
@@ -159,6 +248,8 @@ function repairInlineListIndent(input: string): string {
 export function parseClashYaml(content: string): ParseResult {
   const nodes: ParsedNode[] = [];
   const errors: string[] = [];
+  let directDomains: DirectDomainMetadata[] = [];
+  let baseConfigYaml: string | undefined;
 
   try {
     const normalizeTabs = (s: string) => s.replace(/\t/g, "  ");
@@ -188,7 +279,12 @@ export function parseClashYaml(content: string): ParseResult {
     if (typeof parsed === "object" && !Array.isArray(parsed)) {
       const config = parsed as ClashConfig;
 
-      if (config.proxies && Array.isArray(config.proxies)) {
+      directDomains = extractDirectDomains(config);
+      baseConfigYaml = extractBaseConfigYaml(config);
+
+      if (config.proxies !== undefined && !Array.isArray(config.proxies)) {
+        errors.push("节点解析失败: proxies 必须是数组");
+      } else if (config.proxies && Array.isArray(config.proxies)) {
         for (const proxy of config.proxies) {
           try {
             const node = normalizeNode(proxy);
@@ -199,7 +295,7 @@ export function parseClashYaml(content: string): ParseResult {
             );
           }
         }
-      } else {
+      } else if (!looksLikeFullClashConfig(config)) {
         // 2) 单个 proxy 对象（用户直接粘贴了一条节点 YAML）
         try {
           const node = normalizeNode(config as unknown as Record<string, unknown>);
@@ -219,7 +315,7 @@ export function parseClashYaml(content: string): ParseResult {
       // 注意：proxy-providers 需要在服务器端拉取，浏览器端无法直接获取
       if (hasProxyProviders) {
         errors.push(
-          "检测到 proxy-providers 配置，由于浏览器限制无法自动拉取，请直接粘贴节点内容"
+          "检测到 proxy-providers 配置，已保留到基础配置；浏览器不会自动拉取其中的节点"
         );
       }
     } else if (Array.isArray(parsed)) {
@@ -244,6 +340,8 @@ export function parseClashYaml(content: string): ParseResult {
       errors,
       totalParsed: nodes.length,
       totalFailed: errors.length,
+      ...(directDomains.length > 0 ? { directDomains } : {}),
+      ...(baseConfigYaml ? { baseConfigYaml } : {}),
     };
   } catch (e) {
     return {

@@ -26,6 +26,7 @@ import {
   Minimize2,
   Network,
   Plus,
+  RotateCcw,
   Search,
   SlidersHorizontal,
   ShieldCheck,
@@ -36,10 +37,12 @@ import {
 } from "lucide-react";
 import { generateClashConfig, generateClashYaml } from "@subboost/core/generator";
 import { PROXY_GROUP_MODULES } from "@subboost/core/generator/proxy-groups";
+import { DEFAULT_BASE_CONFIG_YAML } from "@subboost/core/config/defaults";
 import { parseBase64, parseSubscription } from "@subboost/core/parser";
 import { RULE_PROVIDER_SOURCES } from "@subboost/core/rules/metadata";
 import type { BuiltinRuleEdits, ClashConfig, DirectDomainRule, TemplateType } from "@subboost/core/types/config";
 import type { NodeWithMeta, ParsedNode } from "@subboost/core/types/node";
+import yaml from "js-yaml";
 import { YamlHighlight } from "@/components/yaml-highlight";
 import {
   appendSubscriptionFileContents,
@@ -80,8 +83,8 @@ type NodeRow = {
 };
 
 type ApiImportResponse =
-  | { ok: true; reviewRequired: false; content: string; nodes: ParsedNode[]; errors: string[] }
-  | { ok: true; reviewRequired: true; reviewReason: string; content: string; nodes: ParsedNode[]; errors: string[] }
+  | { ok: true; reviewRequired: false; content: string; nodes: ParsedNode[]; errors: string[]; directDomains?: DirectDomainRule[]; baseConfigYaml?: string }
+  | { ok: true; reviewRequired: true; reviewReason: string; content: string; nodes: ParsedNode[]; errors: string[]; directDomains?: DirectDomainRule[]; baseConfigYaml?: string }
   | { ok: false; error: string; detail?: string | null };
 
 type PendingTlsReview = {
@@ -90,10 +93,12 @@ type PendingTlsReview = {
   content: string;
   nodes: ParsedNode[];
   errors: string[];
+  directDomains?: DirectDomainRule[];
+  baseConfigYaml?: string;
 };
 
 type UrlImportOutcome =
-  | { status: "ready"; url: string; content: string; nodes: ParsedNode[]; errors: string[] }
+  | { status: "ready"; url: string; content: string; nodes: ParsedNode[]; errors: string[]; directDomains?: DirectDomainRule[]; baseConfigYaml?: string }
   | { status: "review"; review: PendingTlsReview }
   | { status: "failed"; url: string; error: string };
 
@@ -162,6 +167,53 @@ function sourceName(kind: SourceKind, value: string, index: number): string {
     }
   }
   return kind === "yaml" ? `YAML ${index}` : `节点 ${index}`;
+}
+
+function mergeImportedDirectDomains(current: DirectDomainRule[], imported: DirectDomainRule[] | undefined): DirectDomainRule[] {
+  if (!imported || imported.length === 0) return current;
+  const merged = new Map(current.map((item) => [item.domain.trim().toLowerCase(), { ...item, domain: item.domain.trim().toLowerCase() }]));
+  for (const item of imported) {
+    const domain = item.domain.trim().toLowerCase();
+    if (!domain) continue;
+    const existing = merged.get(domain);
+    merged.set(domain, {
+      domain,
+      nameservers: [...new Set([...(existing?.nameservers ?? []), ...(item.nameservers ?? [])].map((value) => value.trim()).filter(Boolean))],
+    });
+  }
+  return [...merged.values()];
+}
+
+function mergeImportedBaseConfigYaml(current: string, imported: string | undefined): string {
+  if (!imported?.trim()) return current;
+  if (!current.trim()) return imported.trim();
+  try {
+    const currentConfig = yaml.load(current) as Record<string, unknown>;
+    const importedConfig = yaml.load(imported) as Record<string, unknown>;
+    if (!currentConfig || typeof currentConfig !== "object" || Array.isArray(currentConfig)) return imported.trim();
+    if (!importedConfig || typeof importedConfig !== "object" || Array.isArray(importedConfig)) return current;
+
+    const merged: Record<string, unknown> = { ...currentConfig, ...importedConfig };
+    for (const key of ["dns", "proxy-providers"]) {
+      const left = currentConfig[key];
+      const right = importedConfig[key];
+      if (left && typeof left === "object" && !Array.isArray(left) && right && typeof right === "object" && !Array.isArray(right)) {
+        merged[key] = { ...(left as Record<string, unknown>), ...(right as Record<string, unknown>) };
+      }
+    }
+    return yaml.dump(merged, { noRefs: true, lineWidth: -1, sortKeys: false }).trim();
+  } catch {
+    // long: 用户可能正在编辑一段尚未完整的基础 YAML；保留原编辑内容，避免导入订阅时覆盖未完成配置。
+    return current;
+  }
+}
+
+function mergeImportedTemplateConfig(current: LiteTemplate, imported: { directDomains?: DirectDomainRule[]; baseConfigYaml?: string }): LiteTemplate {
+  return {
+    ...current,
+    directDomains: mergeImportedDirectDomains(current.directDomains, imported.directDomains),
+    baseConfigYaml: mergeImportedBaseConfigYaml(current.baseConfigYaml, imported.baseConfigYaml),
+  };
 }
 
 function buildOutput(nodes: ParsedNode[], template: LiteTemplate) {
@@ -526,6 +578,7 @@ export function Workbench() {
   const [batchImportResult, setBatchImportResult] = useState<BatchImportResult | null>(null);
   const [batchImportProgress, setBatchImportProgress] = useState<BatchImportProgress | null>(null);
   const [viewingNodeKey, setViewingNodeKey] = useState<string | null>(null);
+  const [baseYamlPreviewOpen, setBaseYamlPreviewOpen] = useState(false);
   const [showDecodedReview, setShowDecodedReview] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const sourceInputRef = useRef<HTMLTextAreaElement>(null);
@@ -643,6 +696,7 @@ export function Workbench() {
     (template.adRuleMode === "enhanced" && template.enabledModules.includes("ad") ? 1 : 0) +
     template.directDomains.length;
   const categories = [...new Set(PROXY_GROUP_MODULES.map((module) => module.category))];
+  const enabledModuleCount = PROXY_GROUP_MODULES.filter((module) => template.enabledModules.includes(module.id)).length;
   const providerSourceId = getProviderSourceId(template.ruleProviderBaseUrl);
   const decodedReviewContent = useMemo(
     () => pendingTlsReview ? decodeReviewBase64(pendingTlsReview.content) : null,
@@ -1038,7 +1092,7 @@ export function Workbench() {
     nodes: ParsedNode[],
     errors: string[],
     name?: string,
-    options: { preserveInput?: boolean } = {}
+    options: { preserveInput?: boolean; directDomainCount?: number; baseConfigImported?: boolean } = {}
   ) {
     const nextIndex = sources.length + 1;
     setSources((current) => [
@@ -1053,7 +1107,11 @@ export function Workbench() {
       },
     ]);
     if (!options.preserveInput) setSourceInput("");
-    showNotice("ok", `已导入 ${nodes.length} 个节点`);
+    const details = [
+      options.directDomainCount ? `同步 ${options.directDomainCount} 个直连域名` : "",
+      options.baseConfigImported ? "已保留基础配置" : "",
+    ].filter(Boolean);
+    showNotice("ok", `已导入 ${nodes.length} 个节点${details.length > 0 ? `，${details.join("，")}` : ""}`);
   }
 
   async function confirmTlsReview() {
@@ -1062,7 +1120,12 @@ export function Workbench() {
     setBusy(true);
     try {
       // long: 批量失败链接仍保留在输入框中，审核通过不能顺带清除用户下一步需要重试的内容。
-      await addParsedSource("url", review.content, review.nodes, review.errors, sourceName("url", review.url, sources.length + 1), { preserveInput: true });
+      setTemplate((current) => mergeImportedTemplateConfig(current, review));
+      await addParsedSource("url", review.content, review.nodes, review.errors, sourceName("url", review.url, sources.length + 1), {
+        preserveInput: true,
+        directDomainCount: review.directDomains?.length,
+        baseConfigImported: Boolean(review.baseConfigYaml),
+      });
       advanceTlsReview();
     } catch (error) {
       showNotice("error", error instanceof Error ? error.message : "审核来源加入失败");
@@ -1083,11 +1146,17 @@ export function Workbench() {
     try {
       if (sourceKind !== "url") {
         const parsed = parseSubscription(value);
-        if (parsed.nodes.length === 0) {
+        if (parsed.nodes.length === 0 && !parsed.baseConfigYaml) {
           showNotice("error", parsed.errors[0] || "未识别到有效节点");
           return;
         }
-        await addParsedSource(sourceKind, value, parsed.nodes, parsed.errors);
+        if (sourceKind === "yaml") {
+          setTemplate((current) => mergeImportedTemplateConfig(current, parsed));
+        }
+        await addParsedSource(sourceKind, value, parsed.nodes, parsed.errors, undefined, {
+          directDomainCount: parsed.directDomains?.length,
+          baseConfigImported: Boolean(parsed.baseConfigYaml),
+        });
         return;
       }
 
@@ -1124,10 +1193,20 @@ export function Workbench() {
                 content: result.content,
                 nodes: result.nodes,
                 errors: result.errors,
+                directDomains: result.directDomains,
+                baseConfigYaml: result.baseConfigYaml,
               },
             };
           } else {
-            outcome = { status: "ready", url, content: result.content, nodes: result.nodes, errors: result.errors };
+            outcome = {
+              status: "ready",
+              url,
+              content: result.content,
+              nodes: result.nodes,
+              errors: result.errors,
+              directDomains: result.directDomains,
+              baseConfigYaml: result.baseConfigYaml,
+            };
           }
         } catch (error) {
           outcome = { status: "failed", url, error: error instanceof Error ? error.message : "订阅链接导入失败" };
@@ -1167,6 +1246,13 @@ export function Workbench() {
             errors: outcome.errors,
           })),
         ]);
+      }
+
+      if (readyOutcomes.length > 0) {
+        setTemplate((current) => readyOutcomes.reduce(
+          (next, outcome) => mergeImportedTemplateConfig(next, outcome),
+          current
+        ));
       }
 
       setSourceInput(failures.map((item) => item.url).join("\n"));
@@ -1215,11 +1301,15 @@ export function Workbench() {
     try {
       const content = await file.text();
       const parsed = parseSubscription(content);
-      if (parsed.nodes.length === 0) {
+      if (parsed.nodes.length === 0 && !parsed.baseConfigYaml) {
         showNotice("error", parsed.errors[0] || "YAML 中没有可用节点");
         return;
       }
-      await addParsedSource("yaml", content, parsed.nodes, parsed.errors, file.name);
+      setTemplate((current) => mergeImportedTemplateConfig(current, parsed));
+      await addParsedSource("yaml", content, parsed.nodes, parsed.errors, file.name, {
+        directDomainCount: parsed.directDomains?.length,
+        baseConfigImported: Boolean(parsed.baseConfigYaml),
+      });
     } catch (error) {
       showNotice("error", error instanceof Error ? error.message : "YAML 文件导入失败");
     } finally {
@@ -1288,6 +1378,26 @@ export function Workbench() {
     const fileName = `${safeFileName(template.name)}.template.json`;
     downloadText(`${JSON.stringify(template, null, 2)}\n`, fileName, "application/json;charset=utf-8");
     showNotice("ok", `模板已导出：${fileName}`);
+  }
+
+  function exportNodes() {
+    const selectedRows = nodeRows.filter((row) => selectedNodeKeys.has(nodeKey(row.sourceId, row.nodeIndex)));
+    const rowsToExport = selectedRows.length > 0 ? selectedRows : nodeRows;
+    if (rowsToExport.length === 0) return;
+    // long: 导出时只保留可被 Clash/Mihomo 解析的节点字段，测试结果等运行时元数据不能混入可复用节点配置。
+    const proxies = rowsToExport.map((row) => Object.fromEntries(
+      Object.entries(row.node).filter(([key]) => !key.startsWith("_"))
+    ));
+    const fileName = `${safeFileName(template.name)}-nodes.yaml`;
+    downloadText(yaml.dump({ proxies }, { noRefs: true, lineWidth: -1, sortKeys: false }), fileName, "text/yaml;charset=utf-8");
+    showNotice("ok", `已导出 ${rowsToExport.length} 个节点，可直接粘贴回“节点连接”输入框`);
+  }
+
+  function restoreDefaultTemplate() {
+    const presetType = matchingBuiltinTemplate ?? "standard";
+    setTemplate(createBuiltinTemplate(presetType));
+    setBaseYamlPreviewOpen(false);
+    showNotice("ok", `已恢复${presetType === "full" ? "高级" : presetType === "minimal" ? "轻量" : "日常"}预设模板，节点信息已保留`);
   }
 
   function downloadConfig() {
@@ -1455,17 +1565,22 @@ export function Workbench() {
 
           <div className="optimization-settings" aria-label="规则优化设置">
             <div className="optimization-heading"><span><Cloud size={14} />下载与规则策略</span><small>适配 FlClash / Mihomo</small></div>
-            <label className="field-label" htmlFor="provider-source">规则集下载源</label>
-            <ProviderSourceSelect
-              value={providerSourceId}
-              onChange={(source) => {
-                if (source === "custom") {
-                  setTemplate((current) => ({ ...current, ruleProviderBaseUrl: "https://rules.example.com/geo" }));
-                  return;
-                }
-                setTemplate((current) => ({ ...current, ruleProviderBaseUrl: RULE_PROVIDER_SOURCES[source].baseUrl }));
-              }}
-            />
+            <div className="provider-policy-row">
+              <div className="provider-policy-control">
+                <label className="field-label" htmlFor="provider-source">规则集下载源</label>
+                <ProviderSourceSelect
+                  value={providerSourceId}
+                  onChange={(source) => {
+                    if (source === "custom") {
+                      setTemplate((current) => ({ ...current, ruleProviderBaseUrl: "https://rules.example.com/geo" }));
+                      return;
+                    }
+                    setTemplate((current) => ({ ...current, ruleProviderBaseUrl: RULE_PROVIDER_SOURCES[source].baseUrl }));
+                  }}
+                />
+              </div>
+              <label className="switch-field optimization-switch"><span>完整国内域名规则</span><input type="checkbox" checked={template.experimentalCnUseCnRuleSet} onChange={(event) => setTemplate((current) => ({ ...current, experimentalCnUseCnRuleSet: event.target.checked }))} /><i /></label>
+            </div>
             {providerSourceId === "custom" ? (
               <input
                 className="form-control custom-source-url"
@@ -1492,37 +1607,45 @@ export function Workbench() {
                 </div>
               </div>
             </div>
-            <label className="switch-field optimization-switch"><span>国内域名增强</span><input type="checkbox" checked={template.experimentalCnUseCnRuleSet} onChange={(event) => setTemplate((current) => ({ ...current, experimentalCnUseCnRuleSet: event.target.checked }))} /><i /></label>
           </div>
 
-          <div className="module-list">
-            {categories.map((category) => {
-              const modules = PROXY_GROUP_MODULES.filter((module) => module.category === category);
-              return (
-                <div className="module-category" key={category}>
-                  <div className="category-heading"><span>{CATEGORY_META[category]}</span><small>{modules.filter((module) => template.enabledModules.includes(module.id)).length}/{modules.length}</small></div>
-                  <div className="module-grid">
-                    {modules.map((module) => {
-                      const checked = template.enabledModules.includes(module.id);
-                      const required = (REQUIRED_MODULES as readonly string[]).includes(module.id);
-                      return (
-                        <label className={`module-toggle ${checked ? "checked" : ""} ${required ? "required" : ""}`} key={module.id} title={module.description}>
-                          <input type="checkbox" checked={checked} disabled={required} onChange={() => toggleModule(module.id)} />
-                          <span className="module-emoji">{module.emoji}</span>
-                          <span>{module.name.replace(module.emoji, "").trim()}</span>
-                          <i>{module.rules.length}</i>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <details className="advanced-settings module-settings">
+            <summary><SlidersHorizontal size={15} /><span>分流规则模块</span><small className="module-settings-count">{enabledModuleCount}/{PROXY_GROUP_MODULES.length} 已启用</small><ChevronRight size={15} /></summary>
+            <div className="advanced-body module-settings-body">
+              <div className="module-list">
+                {categories.map((category) => {
+                  const modules = PROXY_GROUP_MODULES.filter((module) => module.category === category);
+                  return (
+                    <div className="module-category" key={category}>
+                      <div className="category-heading"><span>{CATEGORY_META[category]}</span><small>{modules.filter((module) => template.enabledModules.includes(module.id)).length}/{modules.length}</small></div>
+                      <div className="module-grid">
+                        {modules.map((module) => {
+                          const checked = template.enabledModules.includes(module.id);
+                          const required = (REQUIRED_MODULES as readonly string[]).includes(module.id);
+                          return (
+                            <label className={`module-toggle ${checked ? "checked" : ""} ${required ? "required" : ""}`} key={module.id} title={module.description}>
+                              <input type="checkbox" checked={checked} disabled={required} onChange={() => toggleModule(module.id)} />
+                              <span className="module-emoji">{module.emoji}</span>
+                              <span>{module.name.replace(module.emoji, "").trim()}</span>
+                              <i>{module.rules.length}</i>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </details>
 
           <details className="advanced-settings">
             <summary><SlidersHorizontal size={15} />基础配置<ChevronRight size={15} /></summary>
             <div className="advanced-body">
+              <div className="advanced-body-heading">
+                <strong>基础配置 / DNS YAML</strong>
+                <button className="secondary-button compact-button" type="button" onClick={() => setBaseYamlPreviewOpen(true)}><Eye size={14} />查看</button>
+              </div>
               <div className="field-row">
                 <label><span>Mixed 端口</span><input className="form-control" type="number" min="1" max="65535" value={template.mixedPort} onChange={(event) => setTemplate((current) => ({ ...current, mixedPort: Number(event.target.value) }))} /></label>
                 <label className="switch-field"><span>允许局域网</span><input type="checkbox" checked={template.allowLan} onChange={(event) => setTemplate((current) => ({ ...current, allowLan: event.target.checked }))} /><i /></label>
@@ -1561,8 +1684,12 @@ export function Workbench() {
                   </div>
                 )}
               </div>
-              <label className="field-label" htmlFor="base-yaml">基础和 DNS YAML 覆盖</label>
-              <textarea id="base-yaml" className="base-yaml" spellCheck={false} value={template.baseConfigYaml} onChange={(event) => setTemplate((current) => ({ ...current, baseConfigYaml: event.target.value }))} placeholder="留空使用内置安全配置" />
+              <label className="field-label" htmlFor="base-yaml">编辑配置</label>
+              <textarea id="base-yaml" className="base-yaml" spellCheck={false} value={template.baseConfigYaml} onChange={(event) => setTemplate((current) => ({ ...current, baseConfigYaml: event.target.value }))} placeholder="导入完整 YAML 后会自动保留基础配置；留空使用内置安全配置" />
+              <div className="base-yaml-actions">
+                <span>查看窗口使用语法高亮，固定显示约 20 行内容。</span>
+                <button className="secondary-button compact-button" type="button" onClick={restoreDefaultTemplate}><RotateCcw size={14} />恢复默认</button>
+              </div>
             </div>
           </details>
         </section>
@@ -1670,6 +1797,9 @@ export function Workbench() {
                     </div>
                     <button className="secondary-button compact-button danger-button" type="button" onClick={() => removeNodes(new Set(visibleSelectedRows.map((row) => nodeKey(row.sourceId, row.nodeIndex))))} disabled={testingNodeKeys.size > 0 || visibleSelectedRows.length === 0} title="删除当前筛选中选中的节点">
                       <Trash2 size={15} />删除选中
+                    </button>
+                    <button className="secondary-button compact-button" type="button" onClick={exportNodes} disabled={testingNodeKeys.size > 0 || nodeRows.length === 0} title={selectedNodeKeys.size > 0 ? `导出已选中的 ${selectedNodeKeys.size} 个节点` : `导出全部 ${nodeRows.length} 个节点`}>
+                      <Download size={15} />导出节点
                     </button>
                     <button className="secondary-button compact-button" type="button" onClick={renameNodesByRegion} disabled={testingNodeKeys.size > 0 || regionReadyRows.length === 0} title={regionReadyRows.length > 0 ? "根据已识别的节点区域批量命名" : "请先测试节点或手动填写区域"}>
                       <WandSparkles size={15} />按区域命名
@@ -1824,6 +1954,27 @@ export function Workbench() {
             <pre className="node-detail-content"><code>{JSON.stringify(viewingNodeRow.node, null, 2)}</code></pre>
             <div className="node-detail-actions">
               <button className="accent-button" type="button" onClick={() => setViewingNodeKey(null)}>关闭</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {baseYamlPreviewOpen ? (
+        <div className="base-yaml-preview-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setBaseYamlPreviewOpen(false); }}>
+          <section className="base-yaml-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="base-yaml-preview-title">
+            <div className="base-yaml-preview-heading">
+              <div>
+                <span className="step-index">YAML</span>
+                <h2 id="base-yaml-preview-title">基础配置 / DNS YAML</h2>
+              </div>
+              <button className="icon-button compact" type="button" title="关闭 YAML 查看窗口" aria-label="关闭 YAML 查看窗口" onClick={() => setBaseYamlPreviewOpen(false)}><X size={17} /></button>
+            </div>
+            <p className="base-yaml-preview-hint">语法高亮预览 · 当前窗口固定显示约 20 行，可滚动查看完整内容。</p>
+            <div className="base-yaml-preview-content">
+              <YamlHighlight content={template.baseConfigYaml.trim() || DEFAULT_BASE_CONFIG_YAML} />
+            </div>
+            <div className="base-yaml-preview-actions">
+              <button className="accent-button" type="button" onClick={() => setBaseYamlPreviewOpen(false)}>关闭</button>
             </div>
           </section>
         </div>

@@ -59,6 +59,9 @@ describe("default config builders", () => {
       "mixed-port": DEFAULT_SUBBOOST_CONFIG.mixedPort,
       "allow-lan": DEFAULT_SUBBOOST_CONFIG.allowLan,
     });
+    expect(defaultPatch["geox-url"]?.geoip).toBe("https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/release/geoip.dat");
+    expect(defaultPatch["geox-url"]?.geosite).toBe("https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/release/geosite.dat");
+    expect(defaultPatch["geox-url"]?.mmdb).toBe("https://github.com/MetaCubeX/meta-rules-dat/raw/refs/heads/release/country.mmdb");
   });
 
   it("builds the full SubBoost template config with empty user customization fields", () => {

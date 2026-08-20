@@ -46,6 +46,8 @@ export type SourceImportSuccess = {
   headers: Record<string, string>;
   parsedNodes: ParsedNode[];
   parseErrors: string[];
+  directDomains?: ParseResult["directDomains"];
+  baseConfigYaml?: string;
 };
 
 export type SourceImportFailure = {
@@ -321,5 +323,7 @@ export async function importSubscriptionFromUrl(
     headers: { ...best.headers, ...supplementalHeaders },
     parsedNodes: best.parsed.nodes,
     parseErrors: best.parsed.errors,
+    ...(best.parsed.directDomains ? { directDomains: best.parsed.directDomains } : {}),
+    ...(best.parsed.baseConfigYaml ? { baseConfigYaml: best.parsed.baseConfigYaml } : {}),
   };
 }

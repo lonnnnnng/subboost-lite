@@ -43,6 +43,8 @@ export async function POST(request: Request) {
           content: reviewCandidate.content,
           nodes: reviewCandidate.parsedNodes,
           errors: reviewCandidate.parseErrors,
+          directDomains: reviewCandidate.directDomains,
+          baseConfigYaml: reviewCandidate.baseConfigYaml,
         });
       }
     }
@@ -59,5 +61,7 @@ export async function POST(request: Request) {
     content: result.content,
     nodes: result.parsedNodes,
     errors: result.parseErrors,
+    directDomains: result.directDomains,
+    baseConfigYaml: result.baseConfigYaml,
   });
 }

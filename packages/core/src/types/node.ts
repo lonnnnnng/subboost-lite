@@ -379,6 +379,10 @@ export interface ParseResult {
   errors: string[];
   totalParsed: number;
   totalFailed: number;
+  // long: 完整 Clash YAML 除了节点，还可能携带 DIRECT 域名和专用 DNS；解析时保留这些配置元数据，避免重新生成后丢失内网访问规则。
+  directDomains?: Array<{ domain: string; nameservers?: string[] }>;
+  // long: 导入完整配置时保留未由转换器重建的顶层 Mihomo 配置，交给工作台的“基础配置”继续编辑。
+  baseConfigYaml?: string;
 }
 
 /**
