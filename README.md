@@ -99,6 +99,176 @@ SubConvert Lite 面向只需要“导入节点 -> 选择规则 -> 生成配置�
 
 > 节点测速会产生真实网络流量。高并发和较大的采样上限可能迅速消耗订阅流量及本机带宽。
 
+### 4. 检测实现与边界
+
+三个检测的目标不同，不能把其中一个检测的成功结果直接等同于另一个检测成功：
+
+| 检测 | 实际做什么 | 是否执行代理协议握手 | 目标地址 |
+| --- | --- | --- | --- |
+| TCP 连通性预检 | 从运行 SubConvert Lite 的本机解析节点地址并建立 TCP 连接 | 否 | 节点的 `server:port` |
+| 代理延迟 | 启动临时 Mihomo，选中节点后通过节点发起 HTTPS 请求 | 是 | `https://www.gstatic.com/generate_204` |
+| 下载测速 | 启动临时 Mihomo，通过节点读取下载源并统计流量 | 是 | Cloudflare、GitHub Release 或自定义 HTTPS 地址 |
+
+#### 4.1 TCP 连通性预检
+
+TCP 检测只回答“从当前电脑到节点入口的端口能不能建立连接”，不负责验证代理协议本身：
+
+- 默认超时为 `3.5` 秒，页面可配置为 `1-30` 秒。
+- 默认使用 `6` 个并发 worker。
+- 目标是节点原始的域名/IP 和端口，不经过被测节点，也不使用本机代理软件。
+- 域名会先经过公网 DNS 解析和 SSRF 安全检查；回环地址、内网地址及其他非公网地址不会作为普通探测目标。
+- 不执行 VMess、VLESS、Trojan、Reality、Hysteria 等协议握手，也不验证 UUID、密码、TLS、SNI 或 Reality 公钥。
+- DNS 能解析但 TCP 连接失败时，解析得到的 IP 仍可能作为后续 Mihomo 候选；最终是否可用由代理层测试决定。
+
+因此，TCP 结果的含义是：
+
+```text
+TCP 可达 = 入口端口接受连接
+TCP 可达 ≠ 代理协议可用
+TCP 可达 ≠ 能访问互联网
+```
+
+#### 4.2 代理协议支持边界
+
+延迟和测速不由本项目自行实现各类代理协议，而是把节点转换为临时 Mihomo 配置后交给 Mihomo 内核处理。导入解析器能识别的协议范围可能比测试器实际能运行的范围更宽。
+
+当前测试器明确拒绝以下类型：
+
+```text
+socks4
+h2-connect
+trust-tunnel
+trusttunnel
+external
+```
+
+常见协议会继续交给 Mihomo 尝试，包括：
+
+```text
+SS、SSR、VMess、VLESS、Trojan、AnyTLS、
+Hysteria、Hysteria2、TUIC、SOCKS5、
+HTTP/HTTPS、SSH、WireGuard、Snell
+```
+
+节点还必须满足对应的最小字段要求：
+
+| 协议 | 关键字段 |
+| --- | --- |
+| SS | `cipher`、`password` |
+| SSR | `cipher`、`password`、`protocol`、`obfs` |
+| VMess | `uuid` |
+| VLESS | `uuid` |
+| Trojan / AnyTLS | `password` |
+| Hysteria2 | `password` |
+| Snell | `psk` |
+| WireGuard | 合法的 `private-key`；可选公钥和预共享密钥也必须合法 |
+| SSH | `password` 或合法 PEM 格式 `private-key` |
+
+另外，以下组合也可能在进入 Mihomo 前被判定为不支持：
+
+- VLESS Reality 的 `public-key`、`short-id` 等字段格式不正确；
+- VLESS XHTTP 参数不完整或格式不合法；
+- SS 插件参数不符合 Mihomo 支持格式；
+- 节点带有内部 `_subboost-invalid-mihomo-node` 标记；
+- 原始节点字段经过安全清洗后，无法组成有效的 Mihomo 节点。
+
+#### 4.3 固定 IP、TLS 与域名字段
+
+为降低 DNS rebinding 风险，TCP 预检成功后，临时 Mihomo 配置通常会把节点的 `server` 固定为刚刚核验过的公网 IP。对于部分 TLS 协议，程序会把原始域名补回 SNI：
+
+- VMess / VLESS：补回 `servername` 或 `sni`；
+- Trojan / AnyTLS / Hysteria / Hysteria2 / TUIC：补回 `sni` 或 `servername`。
+
+这套处理能兼顾公网地址安全校验和常见 TLS 节点，但并不是所有传输方式都能自动恢复原始域名语义。依赖特定 Host、WS、XHTTP 或其他嵌套传输字段的节点，仍可能出现“V2ray 可用、Mihomo 测试失败”的差异。此时应重点检查原始节点的 SNI、Host、路径、指纹、Reality 和传输层参数。
+
+#### 4.4 代理延迟的成功条件
+
+延迟测试使用 Mihomo 控制接口的 `delay` 检测，并固定请求：
+
+```text
+URL:      https://www.gstatic.com/generate_204
+timeout:  6000ms
+expected: 200/204
+```
+
+它测量的是“协议握手完成后，通过代理访问指定 HTTPS 目标”的耗时，不是 ICMP Ping，也不是单纯 TCP 建连时间。以下任何情况都会导致代理延迟失败：
+
+- 协议握手失败；
+- Reality、TLS、SNI、指纹或传输层参数不匹配；
+- 节点出口无法访问该目标；
+- 目标被网络策略拦截；
+- 目标返回 403、404、503 等非 `200/204` 状态；
+- Mihomo 节点切换失败、控制端口启动失败或内核不可用。
+
+因此可能出现：
+
+```text
+TCP 端口通，但代理延迟测试失败
+```
+
+这表示入口端口可以连接，但还没有证明该节点能够按当前 Mihomo 参数完成代理访问。
+
+连通/延迟模式不限制一次选择的节点数量。节点先进行 TCP 预检，再分配给最多 `6` 个独立 Mihomo worker；每个 worker 内部逐个切换节点。每个节点完成后立即通过 NDJSON 流推送结果，页面不会等整批节点全部结束才显示。
+
+#### 4.5 下载测速的成功条件
+
+测速同样必须先通过 Mihomo 代理链路。当前实现的边界如下：
+
+- 单批最多 `5` 个节点；
+- 节点之间在同一个 Mihomo 测速批次内依次执行；
+- 单个节点内部使用并发下载流，范围 `1-100`，默认 `10`；
+- 测速窗口范围 `15-300` 秒，默认 `15` 秒；
+- 预热阶段 `1.5` 秒，不计入稳态平均速度；
+- 稳态采样上限 `50-2048 MB`，默认 `300 MB`；
+- 稳态有效样本少于 `1 MB` 时判定为失败；
+- 下载内容只读取响应流并统计字节数，不保存到磁盘。
+
+默认和可选测速源：
+
+```text
+Cloudflare: https://speed.cloudflare.com/__down?bytes=...
+GitHub:     https://github.com/ollama/ollama/releases/download/v0.32.14/ollama-linux-arm64-jetpack5.tar.zst
+自定义:     仅允许 HTTPS URL
+```
+
+Cloudflare 源通过 `bytes` 参数请求指定大小；GitHub 和自定义源使用 HTTP `Range` 分块请求。测速源如果被节点出口拦截、返回错误页、无法提供有效响应体、不支持当前 Range 请求，或者实际收到的数据不足 `1 MB`，都会导致测速失败或样本不足。
+
+测速期间页面会显示当前速度和峰值；窗口结束后显示稳态平均速度和峰值。若部分下载流失败但剩余流仍取得至少 `1 MB` 有效样本，结果仍可能显示为可用，同时记录 `stream-error` 和失败流数量。
+
+这里的“并发 `20`”表示**一个节点同时开 20 条下载流**，不是 20 个节点同时测速。测速会产生真实流量，下载并发、测速时长和采样上限越大，消耗的订阅流量及本机带宽越多。
+
+#### 4.6 出口 IP 与区域识别
+
+延迟和测速过程中，程序会通过当前被选中的 Mihomo 节点访问多个公网 IP 查询服务，再使用多数结果确定出口 IP 和国家/地区：
+
+- 查询服务最多 `7` 个；
+- 单次出口查询超时为 `5` 秒；
+- 需要形成唯一多数，结果分歧时不会强行覆盖区域；
+- 出口查询失败只影响 IP、地区或服务商字段，不单独把代理节点判定为不可用。
+
+这里识别的是**实际通过被测节点出去的出口地址**，不是节点入口 IP，也不是节点名称中的地区文字。不同数据库存在差异时，页面可能显示为空或保留已有区域，不能把 GeoIP 地区当作协议可用性的证明。
+
+#### 4.7 页面状态与错误含义
+
+测试结果分为两层：
+
+- `TCP reachable`：入口 TCP 可达；
+- `proxy available`：Mihomo 已完成代理层测试；
+- `unavailable`：代理握手、目标访问或测速过程失败；
+- `unsupported`：节点类型或字段组合不在当前 Mihomo 测试边界内；
+- `core-unavailable`：Mihomo 内核无法准备或启动。
+
+页面最终优先展示代理层结果。因此“端口通但代理测试失败”会显示为测试失败并使用红色标记，而不是把 TCP 成功误显示成节点可用。
+
+对应实现位于：
+
+- [TCP 预检](apps/web/src/lib/node-test/tcp.ts)
+- [测试调度与并发](apps/web/src/lib/node-test/server.ts)
+- [Mihomo 协议、延迟和测速](apps/web/src/lib/node-test/mihomo.ts)
+- [Mihomo 节点字段校验](packages/core/src/mihomo/proxy-sanitizer.ts)
+- [测速目标构造](apps/web/src/lib/node-test/speed-target.ts)
+- [节点测试 API 参数边界](apps/web/app/api/node-test/route.ts)
+
 ## 快速开始
 
 ### 环境要求
