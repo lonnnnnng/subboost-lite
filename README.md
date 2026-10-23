@@ -319,7 +319,9 @@ SUBCONVERT_ALLOWED_ORIGINS=http://192.168.1.2:9999 npm start
 
 浏览器打开 [http://192.168.1.2:9999](http://192.168.1.2:9999)。不需要数据库或登录；只用于可信局域网，不要直接映射到公网。HTTP 页面复制 YAML 使用传统兼容路径，受浏览器策略限制时仍可下载文件。
 
-开机自启、独立服务账号、日志、更新回滚和已有 TUN 的注意事项见 [Linux 部署指南](docs/linux-deployment.md)。
+Linux 安装/更新入口：[部署脚本](deploy/linux/install.sh)。支持只读预检、独立发布目录、非 root 服务、开机自启、HTTP 健康检查和启动失败恢复；更新保留现有环境及可选 TUN 配置。
+
+macOS 源码打包上传、Linux 构建、首次安装、更新回滚和已有 TUN 的完整命令见 [Linux 部署指南](docs/linux-deployment.md)。不需要把私有仓库凭证保存到服务器。
 
 ### 使用外部 Mihomo 内核
 

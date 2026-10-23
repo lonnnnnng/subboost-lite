@@ -17,19 +17,57 @@
 
 Node 不依赖交互式 nvm 初始化。运行时只复制服务器已有的 Linux Node 可执行文件；npm 仅在部署构建时需要。不要上传 macOS 的 node_modules、.next 或二进制缓存。
 
-## 准备与构建
+## 部署入口
 
-1. 确认 `9999` 未被占用，服务器能够访问 npm registry、GitHub API/Release、订阅地址和测试目标。
-2. 把源码上传到新的发布目录。使用仓库锁文件在 Linux 上执行 `npm ci`、`npm run build`；保留运行时依赖，不要只上传 `.next/static`。
-3. 首次部署创建无登录的 `subconvert` 系统账号；确保该账号可读发布目录，不能赋予 sudo。创建 `/opt/subboost-lite/runtime`，放入所选 Linux Node 的 `node` 可执行文件。
-4. 将 `current` 指向已构建的版本，然后安装配置与服务（以下命令需要管理员权限）：
+- [install.sh](../deploy/linux/install.sh)：安装、更新、只读预检和启动失败恢复。
+- [subboost-lite.service](../deploy/linux/subboost-lite.service)：非 root 的 systemd 服务。
+- [subboost-lite.env.example](../deploy/linux/subboost-lite.env.example)：环境变量参考。
+- [direct-routing.conf](../deploy/linux/direct-routing.conf)、[direct-routing.sh](../deploy/linux/direct-routing.sh)、[resolv.conf.example](../deploy/linux/resolv.conf.example)：可选 TUN 隔离配置，安装脚本不会自动启用。
+
+安装脚本面向使用 systemd、GNU tar、`useradd` 的 Linux，已部署的主机为 Ubuntu 24.04。服务器先准备好符合项目 engines 的 Linux Node/npm、curl、tar 和 Git（Git 仅克隆时需要）。脚本不会安装系统软件、修改防火墙、停止已有代理或改动全局 DNS。
+
+## 1. 上传源码（在 macOS 执行）
+
+在本仓库根目录执行。私有仓库不必给服务器配置 GitHub 凭证：使用 Git 已提交文件打包上传，不携带 `.git`、本地环境文件、node_modules、构建产物或节点缓存。`git archive` 不会产生 macOS 的 `._*` 扩展属性文件。
+
+```zsh
+bundle_dir=$(mktemp -d)
+git archive --format=tar.gz --output="$bundle_dir/subboost-lite.tar.gz" HEAD
+git rev-parse HEAD > "$bundle_dir/REVISION"
+ssh -i ~/.ssh/id_ed25519 lee@192.168.1.2 'mkdir -p /home/lee/subboost-lite-upload'
+scp -i ~/.ssh/id_ed25519 "$bundle_dir/subboost-lite.tar.gz" "$bundle_dir/REVISION" \
+  lee@192.168.1.2:/home/lee/subboost-lite-upload/
+ssh -i ~/.ssh/id_ed25519 lee@192.168.1.2
+```
+
+另一种方式是在服务器已具备私有仓库读取权限时 `git clone https://github.com/lonnnnnng/subboost-lite.git`，然后进入仓库执行下一节的安装与构建。不要把访问令牌写进 URL 或脚本。
+
+## 2. 构建并安装（在 Linux 执行）
+
+先确认 `9999` 未被其他服务占用，服务器能够访问 npm registry、GitHub API/Release、订阅地址和测试目标。以下构建命令由普通账号 `lee` 执行，**不要使用 sudo npm**。每次使用新目录，避免覆盖正在运行的 `.next`。
 
 ```sh
-sudo install -m 640 -o root -g subconvert deploy/linux/subboost-lite.env.example /etc/subboost-lite.env
-sudo install -m 644 deploy/linux/subboost-lite.service /etc/systemd/system/subboost-lite.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now subboost-lite.service
+release_source=$(mktemp -d /home/lee/subboost-lite-build.XXXXXX)
+tar --no-same-owner -xzf /home/lee/subboost-lite-upload/subboost-lite.tar.gz -C "$release_source"
+cp /home/lee/subboost-lite-upload/REVISION "$release_source/REVISION"
+cd "$release_source"
+node --version
+npm --version
+npm ci
+npm run build
+
+# 只读检查构建、Node、监听配置；不安装、不切换、不重启。
+sudo bash deploy/linux/install.sh --source "$PWD" --node "$(command -v node)" \
+  --host 192.168.1.2 --port 9999 --check
+
+# 确认后安装并激活，管理员密码只在终端中输入。
+sudo bash deploy/linux/install.sh --source "$PWD" --node "$(command -v node)" \
+  --host 192.168.1.2 --port 9999
 ```
+
+脚本会创建独立发布目录、复制 Linux 构建及依赖、首次创建无登录服务账号和 Node 运行时、安装 systemd 服务、检查 HTTP 响应并启用开机自启。启动或健康检查失败时，尝试恢复原软链接及服务文件；失败发布和配置备份保留，便于排查。首次安装没有旧版本时，失败后服务会停止，修正原因后重新执行即可。
+
+更新仍执行以上流程：**已有 `/etc/subboost-lite.env`、DNS 文件和 systemd drop-in 不覆盖**，因此更新命令中的 `--host` / `--port` 不会更改现有监听配置；要改地址请手动编辑环境文件后重启。已有运行时与本次构建 Node 版本不同时脚本会拒绝安装，不擅自升级共享运行时；先规划并备份 Node 运行时升级，再重新构建。自动恢复不包括管理员手工修改的配置或 Node 版本。
 
 示例环境为此服务器地址；换服务器时必须同步修改 `SUBCONVERT_HOST` 与 `SUBCONVERT_ALLOWED_ORIGINS`。`PORT` 必须是 1–65535 的整数。监听 `0.0.0.0` 不等于允许所有访问地址：API 仍要求来源白名单。
 
@@ -58,7 +96,7 @@ sudo nsenter -t "$(systemctl show subboost-lite.service -p MainPID --value)" -m 
 
 路由准备和回收由 systemd 以 root 执行，Web 和临时 Mihomo 始终是非 root；停止服务时只删除本服务匹配的 UID 规则。优先级冲突会使启动失败，不覆盖其他规则。不要通过禁用公网 IP 校验、开放私网节点或全局关闭代理来绕过这个问题。
 
-## 运维
+## 运维、更新与回滚
 
 ```sh
 sudo systemctl status subboost-lite.service --no-pager
@@ -67,10 +105,30 @@ sudo systemctl stop subboost-lite.service
 sudo journalctl -u subboost-lite.service -n 100 --no-pager
 ```
 
-更新时先在新的 `releases/<发布标识>` 目录安装依赖并构建，再短暂停止服务，切换 `current`，启动并核验；不要在服务运行中覆盖 `.next`。旧版本保留，失败时停止服务、把 `current` 切回旧版本后启动。若旧版本的服务或路由脚本不同，也需要同步恢复对应配置。
+更新代码时，重新执行“上传源码”和“构建并安装”，无需卸载服务。脚本不会自动删除旧版本、上传包或构建目录。
+
+如需手动回滚，先查找发布目录和 `REVISION`，确认要恢复的绝对路径（不要直接粘贴示例占位符）：
+
+```sh
+readlink -f /opt/subboost-lite/current
+ls -lt /opt/subboost-lite/releases
+cat /opt/subboost-lite/releases/<旧发布标识>/REVISION
+
+# 先停旧服务再切换，使旧 ExecStopPost 能正确回收可选 TUN 路由。
+sudo systemctl stop subboost-lite.service
+sudo ln -sfn /opt/subboost-lite/releases/<旧发布标识> /opt/subboost-lite/current
+sudo install -m 644 /opt/subboost-lite/current/deploy/linux/subboost-lite.service /etc/systemd/system/subboost-lite.service
+sudo systemctl daemon-reload
+sudo systemctl start subboost-lite.service
+sudo systemctl status subboost-lite.service --no-pager
+curl --noproxy '*' -fsS http://192.168.1.2:9999/ -o /dev/null
+```
+
+回滚仅切换代码与基础服务文件，保留环境配置和可选 drop-in。如果旧版需要不同的环境、路由脚本或 Node，必须恢复对应备份后再启动。不要删除 `current` 正在使用的发布目录。
 
 ## 验证和边界
 
+- 安装器分支测试可在本机一次性容器中运行：`docker run --rm --network none -e SUBBOOST_DEPLOY_TEST_CONTAINER=1 -v "$PWD:/repo:ro" --entrypoint bash postgres:16 /repo/deploy/linux/install.test.sh`。另加 `-e SUBBOOST_DEPLOY_TEST_FAIL_FIRST=1` 可验证首次激活失败。测试使用模拟的 Node、systemd 和 HTTP 探测，验证预检无写入、配置保留、更新切换及失败恢复；不代替真实 Linux 服务验收，严禁在生产主机直接执行测试脚本。
 - 2026-10-24 已在此服务器验证：Ubuntu 24.04 x64、Node.js 24.15.0、Next.js 16.4.3、Mihomo 1.19.33 compatible；Linux 与 macOS 均通过 488 项 Vitest 测试、3 项启动测试、类型检查、Lint 和生产构建。此次锁文件的 npm audit 为 0 项已知告警，不代表未来不会出现新公告。
 - 使用用户提供的真实订阅成功导入 28 个节点，抽取 6 个进行 TCP/代理延迟检测并逐条返回结果；另以 15 秒、10 条下载流、50 MB 上限验证真实下载测速和进度消息。属于部署冒烟验证，不代表订阅内所有节点或所有协议都已验收。
 - 浏览器打开页面，测试来源导入、模板预览、复制/下载、节点测试流式进度。
