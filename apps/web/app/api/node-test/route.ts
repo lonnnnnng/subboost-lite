@@ -1,28 +1,9 @@
 import { NextResponse } from "next/server";
+import { isAllowedApiRequest } from "@/lib/api-access";
 import { isNodeTestRequestItem, testNodeBatch } from "@/lib/node-test/server";
 import { MAX_SPEED_TEST_NODES, type NodeTestApiResponse, type NodeTestMode, type NodeTestRequest, type NodeTestStreamMessage, type SpeedTestSource } from "@/lib/node-test/types";
 
 export const runtime = "nodejs";
-
-function isLocalRequest(request: Request): boolean {
-  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
-  const requestHost = forwardedHost || request.headers.get("host") || new URL(request.url).host;
-  let hostname: string;
-  try {
-    hostname = new URL(`http://${requestHost}`).hostname.replace(/^\[|\]$/g, "");
-  } catch {
-    return false;
-  }
-  if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") return false;
-  const origin = request.headers.get("origin");
-  if (!origin) return true;
-  try {
-    // long: Next 开发服务器可能把 Request.url 改写为内部地址；同源判断以浏览器实际发送的 Host 为准。
-    return new URL(origin).host === requestHost;
-  } catch {
-    return false;
-  }
-}
 
 function json(body: NodeTestApiResponse, status = 200) {
   return NextResponse.json<NodeTestApiResponse>(body, {
@@ -32,8 +13,8 @@ function json(body: NodeTestApiResponse, status = 200) {
 }
 
 export async function POST(request: Request) {
-  // long: 节点探测具备主动联网和下载能力，只允许当前机器上的同源页面调用，避免接口被远程滥用。
-  if (!isLocalRequest(request)) return json({ ok: false, error: "节点测试只允许从本机页面调用" }, 403);
+  // long: 主动联网接口默认仅本机可用，局域网部署只放行管理员明确配置的同源页面。
+  if (!isAllowedApiRequest(request)) return json({ ok: false, error: "当前访问地址未获允许或请求不是同源，请检查服务器允许的访问地址" }, 403);
 
   let body: unknown;
   try {

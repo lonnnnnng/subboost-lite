@@ -1,0 +1,4 @@
+# long: 服务专用的真实 DNS，不修改宿主机解析配置，也不影响生成给客户端的 DNS YAML。
+nameserver 223.5.5.5
+nameserver 119.29.29.29
+options timeout:2 attempts:2

@@ -16,6 +16,7 @@ import type { NodeTestMode, ProxyProbeResult, SpeedTestSource } from "./types";
 import { calculateDownloadSpeedMbps, calculateStabilityPercent } from "./speed-math";
 import { requestEgressIpInfo } from "./egress-ip";
 import { buildSpeedTestTarget } from "./speed-target";
+import { mihomoAssetPattern } from "./mihomo-platform";
 
 const RELEASE_API = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest";
 const BINARY_MAX_BYTES = 40 * 1024 * 1024;
@@ -67,13 +68,6 @@ function binaryDirectory(): string {
     : join(process.cwd(), "apps/web/data/mihomo");
 }
 
-function assetPattern(): RegExp | null {
-  if (process.platform !== "darwin") return null;
-  if (process.arch === "arm64") return /^mihomo-darwin-arm64-v\d+\.\d+\.\d+\.gz$/;
-  if (process.arch === "x64") return /^mihomo-darwin-amd64-v\d+\.\d+\.\d+\.gz$/;
-  return null;
-}
-
 async function fileExists(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isFile();
@@ -103,7 +97,7 @@ async function downloadMihomoBinary(): Promise<MihomoBinary> {
     return { path: binaryPath, version };
   }
 
-  const pattern = assetPattern();
+  const pattern = mihomoAssetPattern(process.platform, process.arch);
   if (!pattern) throw new Error("当前系统架构暂不支持自动准备 Mihomo 内核");
 
   const releaseResponse = await fetch(RELEASE_API, {
@@ -113,7 +107,7 @@ async function downloadMihomoBinary(): Promise<MihomoBinary> {
   if (!releaseResponse.ok) throw new Error(`获取 Mihomo 发布信息失败：HTTP ${releaseResponse.status}`);
   const release = await releaseResponse.json() as ReleaseInfo;
   const asset = release.assets?.find((item) => typeof item.name === "string" && pattern.test(item.name));
-  if (!asset?.browser_download_url || !asset.name) throw new Error("未找到适用于当前 Mac 的 Mihomo 内核");
+  if (!asset?.browser_download_url || !asset.name) throw new Error("未找到适用于当前系统的 Mihomo 内核");
   if (!asset.size || asset.size > BINARY_MAX_BYTES) throw new Error("Mihomo 内核文件大小异常");
 
   const archiveResponse = await fetch(asset.browser_download_url, {
@@ -184,9 +178,10 @@ function pinNode(item: MihomoTestItem, internalName: string): Record<string, unk
   return node;
 }
 
-async function waitForController(baseUrl: string, secret: string, processHandle: ChildProcess): Promise<string> {
+async function waitForController(baseUrl: string, secret: string, processHandle: ChildProcess, spawnError: () => Error | undefined): Promise<string> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10_000) {
+    if (spawnError()) throw new Error(`Mihomo 无法执行：${spawnError()!.message}`);
     if (processHandle.exitCode !== null) throw new Error("Mihomo 启动失败");
     try {
       const response = await fetch(`${baseUrl}/version`, {
@@ -480,10 +475,13 @@ export async function testNodesWithMihomo(
   const processHandle = spawn(binary.path, ["-d", workDirectory, "-f", configPath], {
     stdio: ["ignore", "ignore", "ignore"],
   });
+  let spawnError: Error | undefined;
+  // long: 外部内核路径可能不可执行或架构错误，捕获 spawn 错误并回传节点结果，避免未处理事件导致整个 Web 服务退出。
+  processHandle.once("error", (error) => { spawnError = error; });
   const baseUrl = `http://127.0.0.1:${controllerPort}`;
   let runtimeVersion = binary.version;
   try {
-    runtimeVersion = await waitForController(baseUrl, secret, processHandle);
+    runtimeVersion = await waitForController(baseUrl, secret, processHandle, () => spawnError);
     for (const item of supported) {
       const proxyName = internalNames.get(item.key)!;
       try {
@@ -533,7 +531,7 @@ export async function testNodesWithMihomo(
   } finally {
     processHandle.kill("SIGTERM");
     await new Promise<void>((resolve) => {
-      if (processHandle.exitCode !== null) return resolve();
+      if (processHandle.exitCode !== null || spawnError) return resolve();
       const timer = setTimeout(() => {
         processHandle.kill("SIGKILL");
         resolve();

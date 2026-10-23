@@ -126,11 +126,11 @@ SubConvert Lite 面向只需要“导入节点 -> 选择规则 -> 生成配置�
 
 #### 4.1 TCP 连通性预检
 
-TCP 检测只回答“从当前电脑到节点入口的端口能不能建立连接”，不负责验证代理协议本身：
+TCP 检测只回答“从运行应用的主机到节点入口的端口能不能建立连接”，不负责验证代理协议本身：
 
 - 默认超时为 `3.5` 秒，页面可配置为 `1-30` 秒。
 - 默认使用 `6` 个并发 worker。
-- 目标是节点原始的域名/IP 和端口，不经过被测节点，也不使用本机代理软件。
+- 目标是节点原始的域名/IP 和端口，由应用直接建立连接，不经过被测节点；宿主机若启用系统级 TUN，仍需单独核验路由，不能假定一定绕过宿主机代理。
 - 域名会先经过公网 DNS 解析和 SSRF 安全检查；回环地址、内网地址及其他非公网地址不会作为普通探测目标。
 - 不执行 VMess、VLESS、Trojan、Reality、Hysteria 等协议握手，也不验证 UUID、密码、TLS、SNI 或 Reality 公钥。
 - DNS 能解析但 TCP 连接失败时，解析得到的 IP 仍可能作为后续 Mihomo 候选；最终是否可用由代理层测试决定。
@@ -288,11 +288,11 @@ Cloudflare 源通过 `bytes` 参数请求指定大小；GitHub 和自定义源�
 
 ### 环境要求
 
-- macOS arm64 或 x64
-- Node.js `>=22.13.0 <23` 或 `>=24.0.0`
+- macOS / Linux，arm64 或 x64（Linux x64 自动选择 compatible 内核）
+- Node.js `>=22.19.0 <23` 或 `>=24.0.0`，服务器建议 Node.js 24 LTS
 - npm（使用仓库中的 `package-lock.json`）
 
-首次执行节点测试时，应用会下载并校验适用于当前 Mac 的 Mihomo 内核，缓存到 `apps/web/data/mihomo/`。
+首次执行节点测试时，应用会下载并校验适用于当前系统的 Mihomo 内核，缓存到 `apps/web/data/mihomo/`。Linux 必须在 Linux 上执行 `npm ci` 和构建，不要复用 macOS 的 `node_modules` 或内核缓存。
 
 ```zsh
 git clone https://github.com/lonnnnnng/subboost-lite.git
@@ -307,12 +307,23 @@ npm run dev
 
 ```zsh
 npm run build
-npm --workspace @subconvert/web run start
+npm start
 ```
+
+默认仍只监听 `127.0.0.1:3010`。局域网服务器可指定监听地址、端口和允许的页面来源：
+
+```sh
+SUBCONVERT_HOST=192.168.1.2 PORT=9999 \
+SUBCONVERT_ALLOWED_ORIGINS=http://192.168.1.2:9999 npm start
+```
+
+浏览器打开 [http://192.168.1.2:9999](http://192.168.1.2:9999)。不需要数据库或登录；只用于可信局域网，不要直接映射到公网。HTTP 页面复制 YAML 使用传统兼容路径，受浏览器策略限制时仍可下载文件。
+
+开机自启、独立服务账号、日志、更新回滚和已有 TUN 的注意事项见 [Linux 部署指南](docs/linux-deployment.md)。
 
 ### 使用外部 Mihomo 内核
 
-非 macOS 环境不会自动下载内核，但可以显式指定兼容当前系统的可执行文件：
+离线环境或需要固定内核版本时，可以显式指定兼容当前系统的可执行文件：
 
 ```zsh
 SUBCONVERT_MIHOMO_PATH=/absolute/path/to/mihomo npm run dev
@@ -322,12 +333,13 @@ SUBCONVERT_MIHOMO_PATH=/absolute/path/to/mihomo npm run dev
 
 ## 安全与隐私
 
-- 节点测试 API 只接受本机同源页面请求。
+- 订阅导入和节点测试 API 默认只接受本机同源请求；局域网部署通过 `SUBCONVERT_ALLOWED_ORIGINS` 显式允许完整来源（包含协议及端口，多个来源用英文逗号分隔）。不信任 `X-Forwarded-Host`，不开放跨站调用；该来源检查不是身份认证，可信局域网之外需要额外访问控制。
 - 订阅抓取会校验公网目标并固定已核验 IP，重定向后会重新检查，降低 SSRF 与 DNS rebinding 风险。
 - 默认严格验证 TLS。只有证书错误且返回内容确实能解析出节点时，才允许用户在弹窗中人工决定是否加入。
 - 忽略证书错误不会把站点变得可信；审核前应检查 URL、节点内容和订阅来源。
 - 订阅内容、节点列表和模板不会写入业务数据库，也不会自动上传到第三方服务。
 - Mihomo 内核及其版本元数据属于本地工具缓存，不包含订阅内容。
+- Linux 部署后，订阅抓取、TCP、代理延迟和下载测速由服务器执行，结果反映服务器网络。宿主机的全局代理/TUN 也可能影响结果，部署前必须确认路由；可用独立账号的专用路由隔离，不能因此关闭公网目标校验。
 
 ## 项目结构
 

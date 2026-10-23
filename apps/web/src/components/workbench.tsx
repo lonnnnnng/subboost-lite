@@ -44,6 +44,7 @@ import type { BuiltinRuleEdits, ClashConfig, DirectDomainRule, TemplateType } fr
 import type { NodeWithMeta, ParsedNode } from "@subboost/core/types/node";
 import yaml from "js-yaml";
 import { YamlHighlight } from "@/components/yaml-highlight";
+import { copyText } from "@/lib/clipboard";
 import {
   appendSubscriptionFileContents,
   formatSubscriptionImportFailures,
@@ -1410,7 +1411,7 @@ export function Workbench() {
   async function copyYaml() {
     if (!output.yaml) return;
     try {
-      await navigator.clipboard.writeText(output.yaml);
+      await copyText(output.yaml);
       showNotice("ok", "YAML 配置已复制到剪贴板");
     } catch {
       showNotice("error", "复制失败，请检查浏览器剪贴板权限");

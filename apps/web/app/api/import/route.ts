@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
+import { isAllowedApiRequest } from "@/lib/api-access";
 import { isTlsCertificateError } from "@subboost/server-core/subscription/tls-certificate-error";
 import { importSourceUrlDirect } from "@/lib/source-import";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
+  if (!isAllowedApiRequest(request)) {
+    return NextResponse.json({ ok: false, error: "当前访问地址未获允许或请求不是同源，请检查服务器允许的访问地址" }, { status: 403 });
+  }
   let body: unknown;
   try {
     body = await request.json();

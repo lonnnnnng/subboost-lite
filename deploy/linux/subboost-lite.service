@@ -1,0 +1,25 @@
+[Unit]
+Description=SubConvert Lite browser workbench
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=subconvert
+Group=subconvert
+WorkingDirectory=/opt/subboost-lite/current
+EnvironmentFile=/etc/subboost-lite.env
+ExecStart=/opt/subboost-lite/runtime/node /opt/subboost-lite/current/scripts/start.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+CacheDirectory=subboost-lite
+
+[Install]
+WantedBy=multi-user.target

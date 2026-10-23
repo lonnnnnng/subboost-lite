@@ -4,6 +4,9 @@ out/
 *.log
 *.tsbuildinfo
 .DS_Store
+.env
+.env.*
+!.env.example
 .playwright-cli/
 output/
 apps/web/data/geoip/
