@@ -47,8 +47,17 @@ export const PROXY_GROUP_MODULES: ProxyGroupModule[] = [
     name: "⚡ 自动选择",
     emoji: "⚡",
     category: "core",
-    description: "自动选择最快节点",
+    description: "按探测延迟优先选择可用节点",
     groupType: "url-test",
+    rules: [],
+  },
+  {
+    id: "fallback",
+    name: "🛟 故障转移",
+    emoji: "🛟",
+    category: "core",
+    description: "按节点列表顺序选择可用节点，优先节点故障后使用备用节点",
+    groupType: "fallback",
     rules: [],
   },
   {

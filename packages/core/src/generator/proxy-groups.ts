@@ -103,11 +103,11 @@ function customTargetIsDisabled(
 /**
  * 代理组显示顺序（在 Clash 客户端中的排列顺序）
  * 
- * 顺序：节点选择 → 自动选择 → (中转组插入位置) → 广告 → 服务 → 私有/国内 → 非中国 → 漏网之鱼
+ * 顺序：节点选择 → 自动选择 → 故障转移 → (中转组插入位置) → 广告 → 服务 → 私有/国内 → 非中国 → 漏网之鱼
  */
 const PROXY_GROUP_ORDER: string[] = [
   // 1. 核心选择组（最前面）
-  "select", "auto",
+  "select", "auto", "fallback",
   // 2. 广告拦截
   "ad",
   // 3. 常用服务
@@ -155,7 +155,8 @@ export function generateProxyGroups(options: ProxyGroupGenerateOptions): ProxyGr
   const inlineCustomProxyGroups = activeCustomProxyGroups.filter((group) => !usesFilteredNodeMembers(group));
 
   const enabledSet = new Set(enabledModules);
-  // 默认顺序（影响 Clash 初始选中项）：节点选择 → 自动选择 → DIRECT → REJECT → 其它节点
+  // long: 保留自动选择作为原有默认出口，故障转移紧随其后，新增策略不应改变已有配置的初始行为。
+  // 默认顺序（影响 Clash 初始选中项）：节点选择 → 自动选择 → 故障转移 → DIRECT → REJECT → 其它节点
   // - 大多数业务组默认指向“🚀 节点选择”，便于用户只改一次全局生效
   // - “🚀 节点选择”组本身会默认选择“⚡ 自动选择”（见下方）
   const enabledModuleTarget = (moduleId: string) =>
@@ -184,10 +185,12 @@ export function generateProxyGroups(options: ProxyGroupGenerateOptions): ProxyGr
   const fallbackTargets = (...targets: unknown[]) => policyTargets(...targets, "DIRECT", "REJECT");
   const selectTarget = enabledModuleTarget("select");
   const autoTarget = enabledModuleTarget("auto");
+  const failoverTarget = enabledModuleTarget("fallback");
   const moduleBaseProxies = selectTarget
     ? fallbackTargets(
         selectTarget,
         autoTarget,
+        failoverTarget,
         "DIRECT",
         "REJECT",
         ...customGroupNames,
@@ -195,6 +198,7 @@ export function generateProxyGroups(options: ProxyGroupGenerateOptions): ProxyGr
       )
     : fallbackTargets(
         autoTarget,
+        failoverTarget,
         ...customGroupNames,
         ...filteredNodeNames,
         "DIRECT",
@@ -253,6 +257,7 @@ export function generateProxyGroups(options: ProxyGroupGenerateOptions): ProxyGr
         if (module.id === "select") {
           const defaultProxies = fallbackTargets(
             autoTarget,
+            failoverTarget,
             "DIRECT",
             "REJECT",
             ...nodeNames
@@ -344,6 +349,7 @@ export function generateProxyGroups(options: ProxyGroupGenerateOptions): ProxyGr
             ...customGroupNames,
             selectTarget,
             autoTarget,
+            failoverTarget,
             ...filteredNodeNames
           ).filter((target) => target !== moduleName);
           groups.push({
@@ -545,9 +551,9 @@ export function generateRuleProviders(options: ProxyGroupGenerateOptions): Recor
 export function getModulesForTemplate(template: "minimal" | "standard" | "full"): string[] {
   switch (template) {
     case "minimal":
-      return ["select", "auto", "ad", "private", "cn", "global", "final"];
+      return ["select", "auto", "fallback", "ad", "private", "cn", "global", "final"];
     case "standard":
-      return ["select", "auto", "ad", "private", "cn", "global", "ai", "youtube", "google", "microsoft", "apple", "github", "telegram", "final"];
+      return ["select", "auto", "fallback", "ad", "private", "cn", "global", "ai", "youtube", "google", "microsoft", "apple", "github", "telegram", "final"];
     case "full":
     default:
       // 排除默认关闭的模块
