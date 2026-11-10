@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSourceImportParseResult,
   importSubscriptionFromUrl,
@@ -20,7 +20,77 @@ function ssLink(name = "SS Node"): string {
   return `ss://${credential}@ss.example.com:8388#${encodeURIComponent(name)}`;
 }
 
+afterEach(() => vi.useRealTimers());
+
 describe("importSubscriptionFromUrl", () => {
+  it.each(["明文", "Base64"])("%s 已有可用节点时不被另一个无响应格式拖到超时", async (format) => {
+    vi.useFakeTimers();
+    let slowSignal: AbortSignal | undefined;
+    const links = ssLink("已成功节点");
+    const resultPromise = importSubscriptionFromUrl({ url: "https://example.com/sub" }, {
+      userAgents: ["fast", "slow"],
+      fetchText: async (request) => {
+        if (request.userAgent === "slow") {
+          slowSignal = request.signal;
+          return new Promise(() => undefined);
+        }
+        return { ok: true, content: format === "Base64" ? Buffer.from(links).toString("base64") : links };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(750);
+    const result = await resultPromise;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.parsedNodes[0]?.name).toBe("已成功节点");
+    expect(slowSignal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("客户端格式都挂起时提前尝试浏览器格式", async () => {
+    vi.useFakeTimers();
+    const fetchText = vi.fn(async (request: SourceImportTransportRequest): Promise<SourceImportTransportResult> => {
+      if (request.userAgent !== "browser") return new Promise(() => undefined);
+      return { ok: true, content: Buffer.from(ssLink("浏览器格式节点")).toString("base64") };
+    });
+    const resultPromise = importSubscriptionFromUrl({ url: "https://example.com/sub" }, {
+      userAgents: ["first", "second", "browser"], fetchText,
+    });
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(fetchText).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(751);
+    const result = await resultPromise;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.parsedNodes[0]?.name).toBe("浏览器格式节点");
+    expect(fetchText).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("短暂比较窗口内仍优先保留节点更多的响应", async () => {
+    vi.useFakeTimers();
+    const resultPromise = importSubscriptionFromUrl({ url: "https://example.com/sub" }, {
+      userAgents: ["fast", "complete"],
+      fetchText: async (request) => {
+        if (request.userAgent === "complete") await new Promise((resolve) => setTimeout(resolve, 500));
+        return { ok: true, content: request.userAgent === "fast" ? ssLink("一") : `${ssLink("一")}\n${ssLink("二").replace(":8388", ":8389")}` };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const result = await resultPromise;
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.parsedNodes).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("所有底层请求均不响应取消时也遵守总期限", async () => {
+    vi.useFakeTimers();
+    const resultPromise = importSubscriptionFromUrl({ url: "https://example.com/sub" }, {
+      timeoutMs: 2000,
+      fetchText: () => new Promise(() => undefined),
+    });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await resultPromise).toMatchObject({ ok: false, error: "订阅抓取超时" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("并行尝试前两个客户端 User-Agent", async () => {
     let active = 0;
     let maxActive = 0;

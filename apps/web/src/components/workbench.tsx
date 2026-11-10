@@ -47,11 +47,9 @@ import { YamlHighlight } from "@/components/yaml-highlight";
 import { copyText } from "@/lib/clipboard";
 import {
   appendSubscriptionFileContents,
-  formatSubscriptionImportFailures,
   mapSubscriptionImportsWithConcurrency,
   parseSubscriptionUrlBatch,
   runSubscriptionImportWithTimeout,
-  SUBSCRIPTION_IMPORT_TIMEOUT_MESSAGE,
   type SubscriptionImportFailure,
 } from "@/lib/batch-import";
 import {
@@ -1260,8 +1258,8 @@ export function Workbench() {
       setShowDecodedReview(false);
       setPendingTlsReviews(reviewQueue);
 
-      if (isBatchImport) {
-        // long: 证书审核队列先暂存，必须确认本批汇总后才展示，避免审核弹框遮住成功与失败结果。
+      if (isBatchImport || failures.length > 0) {
+        // long: 单链接失败也保留结果直到确认，避免短暂通知消失后看起来像没反应；批量审核仍在汇总确认后进行。
         setNotice(null);
         setBatchImportResult({
           successCount: readyOutcomes.length,
@@ -1279,15 +1277,7 @@ export function Workbench() {
         `${failures.length} 个失败`,
         ...(duplicateCount > 0 ? [`忽略 ${duplicateCount} 个重复链接`] : []),
       ].join(" · ");
-      const singleFailure = urls.length === 1 && failures.length === 1 && readyOutcomes.length === 0 && reviewQueue.length === 0;
-      if (singleFailure) {
-        showNotice("error", failures[0].error === SUBSCRIPTION_IMPORT_TIMEOUT_MESSAGE
-          ? SUBSCRIPTION_IMPORT_TIMEOUT_MESSAGE
-          : `导入失败：${formatSubscriptionImportFailures(failures)}`);
-      } else {
-        const failureDetail = failures.length > 0 ? `；失败链接已保留；失败：${formatSubscriptionImportFailures(failures)}` : "";
-        showNotice(reviewQueue.length > 0 || failures.length > 0 ? "error" : "ok", `批量处理完成：${summary}${failureDetail}`);
-      }
+      showNotice(reviewQueue.length > 0 ? "error" : "ok", `订阅处理完成：${summary}`);
     } catch (error) {
       showNotice("error", error instanceof Error ? error.message : "订阅链接导入失败");
     } finally {
@@ -1744,6 +1734,7 @@ export function Workbench() {
                   <div>
                     <strong>节点列表</strong>
                     <span>{testingNodeKeys.size > 0 ? `正在${testingMode === "speed" ? "测速" : "测试连通性与延迟"} · ${testingNodeKeys.size} 个节点` : `显示 ${visibleNodeRows.length} / ${nodeRows.length} 个 · 当前筛选内选中 ${visibleSelectedRows.length} 个`}</span>
+                    <span className="node-table-scroll-hint">左右滑动表格查看完整信息和操作</span>
                   </div>
                   <div className="node-list-actions">
                     <div className="node-test-group">
@@ -1986,7 +1977,7 @@ export function Workbench() {
           <section className="batch-result-dialog" role="dialog" aria-modal="true" aria-labelledby="batch-result-title" aria-describedby="batch-result-description">
             <div className="batch-result-heading">
               <span className="step-index">导入结果</span>
-              <h2 id="batch-result-title">批量订阅处理完成</h2>
+              <h2 id="batch-result-title">订阅导入结果</h2>
               <p id="batch-result-description">请确认本次处理结果，确认后再继续处理需要人工审核的订阅。</p>
             </div>
             <div className="batch-result-summary" aria-label="批量导入统计">

@@ -25,9 +25,16 @@ export async function runSubscriptionImportWithTimeout<T>(
   timeoutMs = SUBSCRIPTION_IMPORT_TIMEOUT_MS
 ): Promise<T> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      reject(new Error(SUBSCRIPTION_IMPORT_TIMEOUT_MESSAGE));
+    }, timeoutMs);
+  });
   try {
-    return await operation(controller.signal);
+    // long: 除了取消网络请求，也要结束不响应 signal 的操作，让后续排队链接能继续取得并发槽。
+    return await Promise.race([operation(controller.signal), timeout]);
   } catch (error) {
     // long: 只把本地定时器触发的中止归类为 15 秒超时，其他网络异常保留原始错误供批量汇总。
     if (controller.signal.aborted) throw new Error(SUBSCRIPTION_IMPORT_TIMEOUT_MESSAGE);

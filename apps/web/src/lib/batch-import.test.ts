@@ -64,6 +64,23 @@ describe("parseSubscriptionUrlBatch", () => {
     await timeoutAssertion;
   });
 
+  it("底层忽略取消信号时仍释放导入槽位让排队链接继续", async () => {
+    vi.useFakeTimers();
+    const started: string[] = [];
+    const results = mapSubscriptionImportsWithConcurrency(["slow", "next"], async (item) => {
+      started.push(item);
+      try {
+        return await runSubscriptionImportWithTimeout(() => item === "slow" ? new Promise<string>(() => undefined) : Promise.resolve(item));
+      } catch (error) {
+        return (error as Error).message;
+      }
+    }, 1);
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(started).toEqual(["slow", "next"]);
+    expect(await results).toEqual(["导入 15s 超时", "next"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("排队等待不占用每条订阅自己的 15 秒超时窗口", async () => {
     vi.useFakeTimers();
     const started: string[] = [];

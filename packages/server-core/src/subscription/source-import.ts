@@ -11,7 +11,6 @@ import {
 } from "@subboost/core/subscription/import-error";
 import { tryNormalizeSubscriptionUrlInput } from "@subboost/core/subscription/url-input";
 import type { ParseResult, ParsedNode } from "@subboost/core/types/node";
-import { shouldTryClashMetaForV2raynPayload } from "./fetch-profile-heuristics";
 import { SUBSCRIPTION_IMPORT_USER_AGENTS } from "./user-agents";
 
 export type SourceImportPurpose = "content" | "userinfo";
@@ -22,6 +21,7 @@ export type SourceImportTransportRequest = {
   purpose: SourceImportPurpose;
   timeoutMs: number;
   maxBytes: number;
+  signal?: AbortSignal;
 };
 
 export type SourceImportTransportResult = {
@@ -101,22 +101,6 @@ function createErrorInfo(message: string, httpStatus?: number): SubscriptionImpo
 
 function isUsableParsedAttempt(attempt: ParsedAttempt): attempt is Extract<ParsedAttempt, { ok: true }> {
   return attempt.ok && attempt.parsed.nodes.length > 0 && !looksLikeClientUpdatePlaceholderNodes(attempt.parsed.nodes);
-}
-
-function shouldContinueAfterCleanAttempt(params: {
-  attempt: ParsedAttempt;
-  currentUserAgent: string;
-  nextUserAgent?: string;
-}): boolean {
-  const { attempt, currentUserAgent, nextUserAgent } = params;
-  if (!isUsableParsedAttempt(attempt) || attempt.parsed.errors.length > 0) return true;
-  if (
-    currentUserAgent === SUBSCRIPTION_IMPORT_USER_AGENTS[0] &&
-    nextUserAgent === SUBSCRIPTION_IMPORT_USER_AGENTS[1]
-  ) {
-    return shouldTryClashMetaForV2raynPayload(attempt.content, attempt.parsed);
-  }
-  return false;
 }
 
 function toFailure(attempt: ParsedAttempt | null, fallback = "获取 url 失败"): SourceImportFailure {
@@ -247,6 +231,7 @@ export async function importSubscriptionFromUrl(
     timeoutMs?: number;
     maxBytes?: number;
     userAgents?: readonly string[];
+    signal?: AbortSignal;
     fetchText: (request: SourceImportTransportRequest) => Promise<SourceImportTransportResult>;
   }
 ): Promise<SourceImportResult> {
@@ -276,54 +261,64 @@ export async function importSubscriptionFromUrl(
   const timeoutMs = options.timeoutMs ?? 15000;
   const maxBytes = options.maxBytes ?? 10 * 1024 * 1024;
   const userAgents = options.userAgents?.length ? options.userAgents : SUBSCRIPTION_IMPORT_USER_AGENTS;
-  let best: ParsedAttempt | null = null;
+  const controller = new AbortController();
+  const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  timers.push(setTimeout(() => controller.abort(), timeoutMs));
+  const wait = (ms: number) => new Promise<void>((resolve) => timers.push(setTimeout(resolve, ms)));
+  const timedOut = (): SourceImportTransportResult => ({ ok: false, error: "订阅抓取超时", publicReason: "订阅抓取超时" });
 
-  const fetchAttempt = (userAgent: string) => fetchAndParseWithUserAgent(url, userAgent, {
-      timeoutMs,
-      maxBytes,
-      fetchText: options.fetchText,
-  });
+  // long: DNS、格式补试和附加信息共用一个截止时间；即使底层不响应取消，也必须释放当前导入 worker。
+  const fetchText = (transportRequest: SourceImportTransportRequest): Promise<SourceImportTransportResult> =>
+    new Promise((resolve) => {
+      if (signal.aborted) { resolve(timedOut()); return; }
+      const finish = (result: SourceImportTransportResult) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      };
+      const onAbort = () => finish(timedOut());
+      signal.addEventListener("abort", onAbort, { once: true });
+      Promise.resolve().then(() => options.fetchText({ ...transportRequest, signal })).then(finish, (error: unknown) => {
+        const message = sanitizePublicErrorText(error instanceof Error ? error.message : String(error)) || "获取 url 失败";
+        finish({ ok: false, error: message });
+      });
+    });
 
-  // long: 前两个客户端协议请求彼此独立，先并行降低单条订阅在兼容性探测上的等待；浏览器 UA 只在前两次都不足以解析时补发。
-  const initialAttempts = await Promise.all(userAgents.slice(0, 2).map(fetchAttempt));
-  for (const attempt of initialAttempts) {
-    best = pickBetterAttempt(best, attempt);
+  try {
+    const attempts: Array<ParsedAttempt | undefined> = new Array(userAgents.length);
+    let notifyUsable: () => void = () => undefined;
+    const firstUsable = new Promise<void>((resolve) => { notifyUsable = resolve; });
+    const fetchAttempt = async (index: number) => {
+      const attempt = await fetchAndParseWithUserAgent(url, userAgents[index], { timeoutMs, maxBytes, fetchText });
+      attempts[index] = attempt;
+      if (isUsableParsedAttempt(attempt)) notifyUsable();
+    };
+    const initial = Promise.all(userAgents.slice(0, 2).map((_, index) => fetchAttempt(index)));
+    const supplementalAttempts = async () => {
+      if (userAgents.length <= 2) return;
+      // long: 两个客户端都迟迟不给结果时，浏览器格式提前补试，避免等满期限后才发现可用内容。
+      await Promise.race([initial, wait(1500)]);
+      if (signal.aborted || attempts.some((attempt) => attempt && isUsableParsedAttempt(attempt) && attempt.parsed.errors.length === 0)) return;
+      await Promise.all(userAgents.slice(2).map((_, index) => fetchAttempt(index + 2)));
+    };
+    // long: 得到可用节点后最多再等 750ms 比较完整度，慢格式不能拖丢已经成功的明文/Base64 结果。
+    await Promise.race([Promise.all([initial, supplementalAttempts()]), firstUsable.then(() => wait(750))]);
+    let best: ParsedAttempt | null = null;
+    for (const attempt of attempts) if (attempt) best = pickBetterAttempt(best, attempt);
+    if (!best || !isUsableParsedAttempt(best)) return toFailure(best);
+
+    const supplementalHeaders = await fetchSupplementalUserInfoHeaders(request, { timeoutMs, maxBytes, fetchText }, url);
+    return {
+      ok: true,
+      content: best.content,
+      headers: { ...best.headers, ...supplementalHeaders },
+      parsedNodes: best.parsed.nodes,
+      parseErrors: best.parsed.errors,
+      ...(best.parsed.directDomains ? { directDomains: best.parsed.directDomains } : {}),
+      ...(best.parsed.baseConfigYaml ? { baseConfigYaml: best.parsed.baseConfigYaml } : {}),
+    };
+  } finally {
+    controller.abort();
+    timers.forEach(clearTimeout);
   }
-
-  const bestNeedsFallback = best === null || shouldContinueAfterCleanAttempt({
-    attempt: best,
-    currentUserAgent: best.userAgent,
-    nextUserAgent: userAgents[2],
-  });
-  if (bestNeedsFallback) {
-    for (let index = 2; index < userAgents.length; index += 1) {
-      const attempt = await fetchAttempt(userAgents[index]);
-      best = pickBetterAttempt(best, attempt);
-      if (!shouldContinueAfterCleanAttempt({
-        attempt,
-        currentUserAgent: userAgents[index],
-        nextUserAgent: userAgents[index + 1],
-      })) break;
-    }
-  }
-
-  if (!best || !best.ok || !isUsableParsedAttempt(best)) {
-    return toFailure(best);
-  }
-
-  const supplementalHeaders = await fetchSupplementalUserInfoHeaders(request, {
-    timeoutMs,
-    maxBytes,
-    fetchText: options.fetchText,
-  }, url);
-
-  return {
-    ok: true,
-    content: best.content,
-    headers: { ...best.headers, ...supplementalHeaders },
-    parsedNodes: best.parsed.nodes,
-    parseErrors: best.parsed.errors,
-    ...(best.parsed.directDomains ? { directDomains: best.parsed.directDomains } : {}),
-    ...(best.parsed.baseConfigYaml ? { baseConfigYaml: best.parsed.baseConfigYaml } : {}),
-  };
 }

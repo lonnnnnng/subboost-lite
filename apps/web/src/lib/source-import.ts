@@ -144,10 +144,11 @@ async function requestUnpinnedText(params: {
 
 async function fetchTextDirect(
   request: SourceImportTransportRequest,
-  options: { allowInvalidTls?: boolean } = {}
+  options: { allowInvalidTls?: boolean; signal?: AbortSignal } = {}
 ): Promise<SourceImportTransportResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), request.timeoutMs);
+  const signal = AbortSignal.any([controller.signal, ...(request.signal ? [request.signal] : []), ...(options.signal ? [options.signal] : [])]);
 
   try {
     let currentUrl = request.url;
@@ -155,6 +156,7 @@ async function fetchTextDirect(
     for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
       // long: 每次重定向都重新解析并固定到已核验的公网 IP，避免订阅地址借重定向访问内网。
       const validation = await validatePublicFetchTarget(currentUrl);
+      signal.throwIfAborted();
       if (!validation.ok) return validation.failure;
 
       const method = request.purpose === "userinfo" ? "HEAD" : "GET";
@@ -165,7 +167,7 @@ async function fetchTextDirect(
             method,
             userAgent: request.userAgent,
             maxBytes: request.maxBytes,
-            signal: controller.signal,
+            signal,
             allowInvalidTls: options.allowInvalidTls,
           })
         : await requestUnpinnedText({
@@ -173,7 +175,7 @@ async function fetchTextDirect(
             method,
             userAgent: request.userAgent,
             maxBytes: request.maxBytes,
-            signal: controller.signal,
+            signal,
           });
 
       if (response.status < 300 || response.status >= 400) break;
@@ -209,11 +211,12 @@ async function fetchTextDirect(
 
 export async function importSourceUrlDirect(
   request: SourceImportRequest,
-  options: { allowInvalidTls?: boolean } = {}
+  options: { allowInvalidTls?: boolean; signal?: AbortSignal } = {}
 ): Promise<SourceImportResult> {
   return importSubscriptionFromUrl(request, {
     timeoutMs: DEFAULT_TIMEOUT_MS,
     maxBytes: DEFAULT_MAX_BYTES,
+    signal: options.signal,
     fetchText: (transportRequest) => fetchTextDirect(transportRequest, options),
   });
 }

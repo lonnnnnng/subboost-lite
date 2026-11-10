@@ -187,6 +187,7 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .yaml-large-notice { padding: 9px 14px; border-bottom: 1px solid #5d512f; background: #4c4228; color: #ffe4a3; font-size: 12px; }
 
 .node-list-view { width: 100%; min-width: 0; height: 100%; min-height: 0; display: flex; flex-direction: column; background: #f7f8f5; }
+.node-table-scroll-hint { display: none; }
 .node-list-toolbar { flex: 0 0 auto; min-height: 64px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; padding: 11px 14px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,0.97); }
 .node-list-toolbar > div { min-width: 0; display: grid; gap: 3px; }
 .node-list-toolbar strong { font-size: 15px; }
@@ -662,4 +663,113 @@ button:disabled { opacity: 0.42; }
 @media (max-width: 1040px) and (min-width: 901px) {
   .template-panel .provider-policy-row { grid-template-columns: 1fr; align-items: stretch; }
   .template-panel .provider-policy-row .optimization-switch { min-height: 26px; }
+}
+
+/* long: 桌面工作区使用固定视口内滚动；窄屏改为页面纵向滚动，避免三栏的最小宽度和后续密度样式挤出手机视口。 */
+@media (max-width: 1100px) {
+  html, body { width: 100%; max-width: 100%; height: auto; min-height: 100%; max-height: none; overflow: visible; }
+  .app-shell { width: 100%; min-width: 0; max-width: 100%; height: auto; min-height: 100dvh; max-height: none; overflow: visible; }
+  .topbar { flex-basis: auto; height: auto; min-height: 68px; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 14px; }
+  .topbar-status { display: none; }
+  .topbar-output-state { display: none; }
+  .workspace { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); height: auto; flex: 1 0 auto; overflow: visible; gap: 12px; padding: 12px; align-items: start; }
+  .panel { height: auto; max-height: none; border: 1px solid var(--line); }
+  .source-panel, .template-panel { min-width: 0; padding: 16px; overflow: visible; }
+  .preview-panel { grid-column: 1 / -1; min-height: 0; height: 760px; }
+  .template-panel .module-category { grid-template-columns: 1fr; }
+  .template-panel .category-heading { display: flex; justify-content: space-between; margin: 0 0 4px; }
+  .template-panel .provider-policy-row { grid-template-columns: 1fr; }
+  .app-footer { flex-basis: auto; min-height: 44px; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .footer-compatibility { display: none; }
+}
+
+/* long: 手机输入保持 16px，避免 iOS 聚焦自动缩放；长表格和 YAML 只在各自容器滚动，不扩大整页宽度。 */
+@media (max-width: 700px) {
+  .topbar { grid-template-columns: minmax(0, 1fr); padding: 14px; gap: 12px; }
+  .brand-block { gap: 10px; }
+  .brand-block h1 { font-size: 20px; }
+  .brand-block p { display: block; }
+  .topbar-actions { justify-content: flex-start; }
+  .topbar-actions .primary-button { flex: 1; }
+  .topbar-status { display: flex; grid-row: 2; width: fit-content; max-width: 100%; height: 30px; }
+  .topbar-status span { padding: 0 12px; }
+  .workspace { grid-template-columns: minmax(0, 1fr); padding: 10px; gap: 10px; }
+  .source-panel, .template-panel { padding: 14px; }
+  .panel h2 { font-size: 17px; }
+  .panel-heading { flex-wrap: wrap; gap: 8px; }
+  .panel-heading > div:first-child { min-width: 0; gap: 6px; }
+  .icon-button, .icon-button.compact { width: 44px; height: 44px; flex-shrink: 0; }
+  .primary-button, .secondary-button, .accent-button, .compact-button { min-height: 44px; font-size: 13px; }
+  .segmented button, .mini-segmented button, .template-panel .template-presets button, .template-panel .mini-segmented button { height: 44px; font-size: 13px; }
+  .source-actions > button { min-height: 44px; }
+  .form-control, .source-input, .base-yaml, .internal-domain-row .form-control { font-size: 16px; }
+  .source-input { min-height: 150px; }
+  .form-control, .provider-source-trigger, .internal-domain-row .form-control { height: 44px; min-height: 44px; }
+  .provider-source-option { min-height: 44px; }
+  .template-panel .module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .template-panel .module-toggle { min-height: 44px; font-size: 13px; }
+  .template-panel .advanced-settings summary { min-height: 44px; height: auto; padding: 10px; }
+  .template-panel .optimization-switch { min-height: 44px; }
+  .template-panel .template-description { font-size: 13px; line-height: 1.6; }
+  .direct-domain-row { grid-template-columns: minmax(0, 1fr) 44px; }
+  .direct-domain-row .form-control:nth-child(2) { grid-column: 1; grid-row: 2; }
+  .direct-domain-row .icon-button { grid-column: 2; grid-row: 1 / 3; align-self: start; }
+  .internal-domain-heading { flex-wrap: wrap; }
+  .preview-panel { height: auto; min-height: 560px; }
+  .preview-toolbar { padding: 12px; gap: 6px; }
+  .preview-toolbar > div:first-child { gap: 6px; }
+  .preview-stats div { min-width: 0; flex-wrap: wrap; gap: 3px; padding: 10px; }
+  .preview-tabs button { min-height: 44px; }
+  .preview-content { min-height: 360px; max-height: 75dvh; margin: -1px 10px 10px; }
+  .preview-content-node-list { max-height: none; }
+  .preview-empty { min-height: 360px; padding: 24px 16px; }
+  .preview-empty-actions { grid-template-columns: 1fr; }
+  .node-list-view { height: auto; }
+  .node-list-toolbar { display: block; padding: 12px; }
+  .node-list-toolbar > div:first-child { margin-bottom: 12px; }
+  .node-list-actions { justify-content: flex-start; gap: 8px; }
+  .node-test-group { width: 100%; gap: 8px; }
+  .node-test-duration { height: 44px; min-height: 44px; }
+  .node-test-duration input, .node-test-duration select { height: 34px; font-size: 16px; }
+  .node-test-custom-url { width: 100%; height: 44px; font-size: 16px; }
+  .node-filter-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px; gap: 8px; }
+  .node-filter-search, .node-filter-select { width: 100%; min-width: 0; height: 44px; }
+  .node-filter-search input { font-size: 16px; }
+  .node-filter-select select { width: 100%; min-width: 0; height: 36px; font-size: 14px; }
+  .node-list-table-scroll { flex: 0 1 auto; max-height: 65dvh; min-height: 220px; overflow: auto; }
+  .node-list-table { min-width: 1420px; }
+  /* long: 手机上固定操作列会挡住节点名称，随表格一起滚动才能读到每列并准确点击。 */
+  .node-list-head > :last-child, .node-list-row > :last-child { position: static; box-shadow: none; }
+  .node-table-scroll-hint { display: block; }
+  .node-list-head, .node-list-row { grid-template-columns: 32px 30px 180px 105px 68px 86px 74px 170px 150px 110px 190px; }
+  .node-check input { width: 22px; height: 22px; }
+  .node-name-input, .node-region-input { font-size: 16px; height: 44px; }
+  .node-list-view:fullscreen { height: 100dvh; overflow: auto; }
+  .node-list-view:fullscreen .node-list-table-scroll { flex: 1 1 auto; min-height: 180px; }
+  .app-footer { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+  .footer-mode { white-space: normal; flex-wrap: wrap; }
+  .notice { top: 12px; width: calc(100% - 24px); min-width: 0; font-size: 14px; }
+  .base-yaml-preview-backdrop, .node-detail-backdrop, .batch-result-backdrop, .tls-review-backdrop { padding: 12px; padding-top: max(12px, env(safe-area-inset-top)); padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .base-yaml-preview-dialog, .node-detail-dialog, .batch-result-dialog, .tls-review-dialog { width: 100%; max-width: 100%; max-height: calc(100dvh - 24px); padding: 14px; gap: 12px; }
+  .base-yaml-preview-dialog, .node-detail-dialog, .batch-result-dialog { overflow-y: auto; }
+  .base-yaml-preview-content { height: 50dvh; min-height: 180px; flex-shrink: 0; }
+  .node-detail-content { min-height: 160px; flex-shrink: 0; }
+  .tls-review-dialog { height: calc(100dvh - 24px); }
+  .tls-review-heading > div:first-child { min-width: 0; flex-wrap: wrap; gap: 4px; }
+  .tls-review-heading h2, .base-yaml-preview-heading h2 { font-size: 17px; white-space: normal; }
+  .tls-review-preview-bar { flex-wrap: wrap; margin-bottom: 0; }
+  .tls-review-actions { flex-wrap: wrap; }
+  .tls-review-actions > button { flex: 1 1 120px; }
+  .batch-result-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .batch-result-summary > div { padding: 10px 8px; }
+}
+
+/* long: 手机横屏和软键盘会压缩可用高度，弹框本身允许滚动，保证确认/关闭操作始终能到达。 */
+@media (max-height: 600px) {
+  .base-yaml-preview-backdrop, .node-detail-backdrop, .batch-result-backdrop, .tls-review-backdrop { padding: 10px; }
+  .base-yaml-preview-dialog, .node-detail-dialog, .batch-result-dialog, .tls-review-dialog { max-height: calc(100dvh - 20px); overflow-y: auto; }
+  .tls-review-dialog { height: calc(100dvh - 20px); }
+  .tls-review-dialog > * { flex-shrink: 0; }
+  .tls-review-content, .node-detail-content { flex: 0 0 auto; min-height: 140px; max-height: 45dvh; }
+  .base-yaml-preview-content { height: 45dvh; min-height: 140px; flex-shrink: 0; }
 }
