@@ -45,6 +45,7 @@ import type { NodeWithMeta, ParsedNode } from "@subboost/core/types/node";
 import yaml from "js-yaml";
 import { YamlHighlight } from "@/components/yaml-highlight";
 import { copyText } from "@/lib/clipboard";
+import { downloadText, type DownloadFormat } from "@/lib/download";
 import {
   appendSubscriptionFileContents,
   mapSubscriptionImportsWithConcurrency,
@@ -146,15 +147,6 @@ function createId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function downloadText(content: string, fileName: string, type: string) {
-  const url = URL.createObjectURL(new Blob([content], { type }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }
 
 function sourceName(kind: SourceKind, value: string, index: number): string {
@@ -1365,10 +1357,18 @@ export function Workbench() {
     }));
   }
 
+  function startDownload(content: string, fileName: string, format: DownloadFormat, message: string) {
+    try {
+      downloadText(content, fileName, format, (error) => showNotice("error", error));
+      showNotice("ok", message);
+    } catch {
+      showNotice("error", "无法发起下载，请检查浏览器下载权限后重试");
+    }
+  }
+
   function exportTemplate() {
     const fileName = `${safeFileName(template.name)}.template.json`;
-    downloadText(`${JSON.stringify(template, null, 2)}\n`, fileName, "application/json;charset=utf-8");
-    showNotice("ok", `模板已导出：${fileName}`);
+    startDownload(`${JSON.stringify(template, null, 2)}\n`, fileName, "json", `已发起模板下载：${fileName}`);
   }
 
   function exportNodes() {
@@ -1380,8 +1380,7 @@ export function Workbench() {
       Object.entries(row.node).filter(([key]) => !key.startsWith("_"))
     ));
     const fileName = `${safeFileName(template.name)}-nodes.yaml`;
-    downloadText(yaml.dump({ proxies }, { noRefs: true, lineWidth: -1, sortKeys: false }), fileName, "text/yaml;charset=utf-8");
-    showNotice("ok", `已导出 ${rowsToExport.length} 个节点，可直接粘贴回“节点连接”输入框`);
+    startDownload(yaml.dump({ proxies }, { noRefs: true, lineWidth: -1, sortKeys: false }), fileName, "yaml", `已发起 ${rowsToExport.length} 个节点的下载，可粘贴回“节点连接”使用`);
   }
 
   function restoreDefaultTemplate() {
@@ -1394,8 +1393,7 @@ export function Workbench() {
   function downloadConfig() {
     if (!output.yaml) return;
     const fileName = `${safeFileName(template.name)}.yaml`;
-    downloadText(output.yaml, fileName, "text/yaml;charset=utf-8");
-    showNotice("ok", `配置已下载：${fileName}`);
+    startDownload(output.yaml, fileName, "yaml", `已发起配置下载：${fileName}，请查看浏览器下载列表`);
   }
 
   async function copyYaml() {
