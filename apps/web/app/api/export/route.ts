@@ -1,9 +1,9 @@
 import { isAllowedApiRequest } from "@/lib/api-access";
+import { MAX_EXPORT_BYTES, prepareExportFile } from "@/lib/export-files";
 
 export const runtime = "nodejs";
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
 // long: 表单百分号编码最多膨胀为原始 UTF-8 的三倍，读取前和读取中都限流，避免大请求占满内存。
-const MAX_FORM_BYTES = MAX_FILE_BYTES * 3 + 64 * 1024;
+const MAX_FORM_BYTES = MAX_EXPORT_BYTES * 3 + 64 * 1024;
 
 function failure(error: string, status: number): Response {
   return Response.json({ ok: false, error }, { status, headers: { "Cache-Control": "no-store" } });
@@ -49,20 +49,9 @@ export async function POST(request: Request): Promise<Response> {
   if (typeof content !== "string" || !content || typeof fileName !== "string" || (format !== "yaml" && format !== "json")) {
     return failure("请提供有效的文件内容、名称和格式", 400);
   }
-  if (Buffer.byteLength(content, "utf8") > MAX_FILE_BYTES) return failure("导出文件不能超过 10 MB", 413);
-  const extension = format === "json" ? ".json" : ".yaml";
-  let name = fileName.trim().replace(/[^\p{L}\p{N}._-]+/gu, "-").replace(/^\.+/, "").slice(0, 160) || "config";
-  if (!name.endsWith(extension)) name += extension;
-  const encodedName = encodeURIComponent(name).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
-  const bytes = Buffer.from(content, "utf8");
-  // long: 配置只在本次请求的内存中原样返回；显式附件、长度和禁用缓存，让浏览器完成普通文件下载而无需临时 Blob。
-  return new Response(bytes, {
-    headers: {
-      "Content-Type": "application/octet-stream",
-      "Content-Disposition": `attachment; filename="config${extension}"; filename*=UTF-8''${encodedName}`,
-      "Content-Length": String(bytes.byteLength),
-      "Cache-Control": "no-store, no-transform",
-      "X-Content-Type-Options": "nosniff",
-    },
-  });
+  if (Buffer.byteLength(content, "utf8") > MAX_EXPORT_BYTES) return failure("导出文件不能超过 10 MB", 413);
+  const file = prepareExportFile(content, fileName, format);
+  if (!file) return failure("当前导出文件较多，请稍后重试", 503);
+  // long: 下载扩展通常只会重放 GET，先准备文件再返回独立地址，避免它丢失 POST 正文后得到 405。
+  return Response.json({ ok: true, ...file }, { headers: { "Cache-Control": "no-store" } });
 }

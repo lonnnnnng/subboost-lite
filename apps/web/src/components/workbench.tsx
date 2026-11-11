@@ -1357,12 +1357,12 @@ export function Workbench() {
     }));
   }
 
-  function startDownload(content: string, fileName: string, format: DownloadFormat, message: string) {
+  async function startDownload(content: string, fileName: string, format: DownloadFormat, message: string) {
     try {
-      downloadText(content, fileName, format, (error) => showNotice("error", error));
+      await downloadText(content, fileName, format);
       showNotice("ok", message);
-    } catch {
-      showNotice("error", "无法发起下载，请检查浏览器下载权限后重试");
+    } catch (error) {
+      showNotice("error", error instanceof Error ? error.message : "无法发起下载，请检查连接后重试");
     }
   }
 
