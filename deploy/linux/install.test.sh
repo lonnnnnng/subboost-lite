@@ -20,6 +20,7 @@ done
 printf 'fixture\n' > "$fixture/source/apps/web/.next/BUILD_ID"
 printf '// fixture\n' > "$fixture/source/scripts/start.mjs"
 printf 'must-not-be-deployed\n' > "$fixture/source/apps/web/.env.local"
+printf 'must-not-be-deployed\n' > "$fixture/source/scripts/.access-password"
 printf '#!/usr/bin/env bash\nfake_node "$@"\n' > "$fixture/node"
 chmod 755 "$fixture/node"
 fake_node() { if [[ ${1:-} == --version ]]; then printf 'v24.15.0\n'; fi; return 0; }
@@ -60,6 +61,7 @@ run_install
 first=$(readlink -f /opt/subboost-lite/current)
 [[ -f "$fixture/active" && -f "$first/apps/web/.next/BUILD_ID" ]]
 [[ ! -e "$first/apps/web/.env.local" ]]
+[[ ! -e "$first/scripts/.access-password" ]]
 [[ $(id -u subconvert) != 0 ]]
 printf 'PASS: 首次安装、非 root 账号和环境文件排除\n'
 

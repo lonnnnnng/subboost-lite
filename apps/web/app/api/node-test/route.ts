@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAllowedApiRequest } from "@/lib/api-access";
+import { requireSession } from "@/lib/auth";
 import { isNodeTestRequestItem, testNodeBatch } from "@/lib/node-test/server";
 import { MAX_SPEED_TEST_NODES, type NodeTestApiResponse, type NodeTestMode, type NodeTestRequest, type NodeTestStreamMessage, type SpeedTestSource } from "@/lib/node-test/types";
 
@@ -16,6 +17,8 @@ export async function POST(request: Request) {
   // long: 主动联网接口默认仅本机可用，局域网部署只放行管理员明确配置的同源页面。
   if (!isAllowedApiRequest(request)) return json({ ok: false, error: "当前访问地址未获允许或请求不是同源，请检查服务器允许的访问地址" }, 403);
 
+  const denied = requireSession(request);
+  if (denied) return denied;
   let body: unknown;
   try {
     body = await request.json();

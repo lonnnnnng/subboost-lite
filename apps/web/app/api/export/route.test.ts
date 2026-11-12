@@ -3,6 +3,8 @@ import { EXPORT_TTL_MS, MAX_EXPORT_BYTES, prepareExportFile } from "@/lib/export
 import { GET, HEAD } from "./[id]/[fileName]/route";
 import { POST } from "./route";
 
+vi.mock("@/lib/auth", () => ({ requireSession: () => null }));
+
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   vi.runOnlyPendingTimers();

@@ -4,6 +4,7 @@ import { POST } from "./route";
 import { createSubscriptionImportErrorInfo } from "@subboost/core/subscription/import-error";
 
 vi.mock("@/lib/source-import", () => ({ importSourceUrlDirect: vi.fn() }));
+vi.mock("@/lib/auth", () => ({ requireSession: () => null }));
 
 afterEach(() => {
   vi.unstubAllEnvs();

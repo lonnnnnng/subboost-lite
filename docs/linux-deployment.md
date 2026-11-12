@@ -1,6 +1,6 @@
 # Linux 局域网部署
 
-本项目不是纯静态页面：订阅抓取、TCP 预检、代理延迟、出口查询和下载测速需要 Node.js 后端以及可执行的 Mihomo。推荐 Linux x64/arm64 + Node.js 24 LTS + systemd。无需数据库、Docker、账号或登录。
+本项目不是纯静态页面：订阅抓取、TCP 预检、代理延迟、出口查询和下载测速需要 Node.js 后端以及可执行的 Mihomo。推荐 Linux x64/arm64 + Node.js 24 LTS + systemd。无需数据库、Docker 或用户注册，访问工作台需输入首次启动生成的密码。
 
 ## 本次服务器约定
 
@@ -11,6 +11,7 @@
 | 当前版本软链接 | `/opt/subboost-lite/current` |
 | Node 可执行文件 | `/opt/subboost-lite/runtime/node` |
 | 环境配置 | `/etc/subboost-lite.env` |
+| 访问密码 | `/var/lib/subboost-lite/.access-password`，首次启动生成，重启和升级保留 |
 | 服务专用 DNS（有 TUN 时） | `/etc/subboost-lite-resolv.conf` |
 | 服务 | `subboost-lite.service`，运行账号 `subconvert` |
 | Mihomo 缓存 | `/var/cache/subboost-lite/mihomo` |
@@ -68,6 +69,18 @@ sudo bash deploy/linux/install.sh --source "$PWD" --node "$(command -v node)" \
 脚本会创建独立发布目录、复制 Linux 构建及依赖、首次创建无登录服务账号和 Node 运行时、安装 systemd 服务、检查 HTTP 响应并启用开机自启。启动或健康检查失败时，尝试恢复原软链接及服务文件；失败发布和配置备份保留，便于排查。首次安装没有旧版本时，失败后服务会停止，修正原因后重新执行即可。
 
 更新仍执行以上流程：**已有 `/etc/subboost-lite.env`、DNS 文件和 systemd drop-in 不覆盖**，因此更新命令中的 `--host` / `--port` 不会更改现有监听配置；要改地址请手动编辑环境文件后重启。已有运行时与本次构建 Node 版本不同时脚本会拒绝安装，不擅自升级共享运行时；先规划并备份 Node 运行时升级，再重新构建。自动恢复不包括管理员手工修改的配置或 Node 版本。
+
+### 查看访问密码
+
+systemd 创建仅服务账号可访问的 `/var/lib/subboost-lite`，程序首次启动时在其中写入 `.access-password`，文件权限为 `600`。启动日志只显示位置，不输出密码；应用升级和重启会继续读取同一文件。
+
+```sh
+sudo cat /var/lib/subboost-lite/.access-password
+```
+
+浏览器访问工作台，输入查看到的密码即可登录。会话固定有效 12 小时，退出或服务重启后需重新登录。要更换密码，使用编辑器将文件替换为单行 12–256 个字符，保留属主 `subconvert` 和权限 `600`，再重启服务。可在环境文件中用 `SUBCONVERT_PASSWORD_FILE` 指定其他绝对路径，但目录应提前创建并允许服务账号读写。
+
+配置完成后可生成 10 分钟临时 HTTP 链接及二维码，直接交给 FlClash 导入；这些文件仅存内存，过期或服务重启后需要重新生成。链接本身就是读取凭据，无需客户端登录，不要分享给他人。HTTP 仍只适合可信局域网，外网访问应使用 HTTPS。
 
 示例环境为此服务器地址；换服务器时必须同步修改 `SUBCONVERT_HOST` 与 `SUBCONVERT_ALLOWED_ORIGINS`。`PORT` 必须是 1–65535 的整数。监听 `0.0.0.0` 不等于允许所有访问地址：API 仍要求来源白名单。
 
@@ -134,7 +147,7 @@ curl --noproxy '*' -fsS http://192.168.1.2:9999/ -o /dev/null
 - 浏览器打开页面，测试来源导入、模板预览、复制/下载、节点测试流式进度。
 - 节点实测由 Linux 服务器执行；不代表浏览器所在电脑的网络性能。
 - TCP 端口通不代表代理协议及固定测试目标一定可用，具体协议边界仍以 README 的检测说明为准。
-- 本次为可信局域网 HTTP，没有添加登录。允许来源不是认证机制；不要公网转发 `9999`，也不要把来源白名单配成任意通配符。
+- 本次为可信局域网 HTTP，工作台和业务接口需密码登录；登录不会加密 HTTP 传输。允许来源不是认证机制；不要公网转发 `9999`，也不要把来源白名单配成任意通配符。
 - 如果后续使用 HTTPS 反向代理，须保留原始 Host，核对后端的协议/来源判断；不要仅靠伪造转发头放行。NDJSON 接口须关闭响应缓冲并设置足够读超时，本次直连部署不需要反向代理。
 
 参考：[Next.js 自托管](https://nextjs.org/docs/app/guides/self-hosting)、[Mihomo 平台下载](https://wiki.metacubex.one/startup/)。

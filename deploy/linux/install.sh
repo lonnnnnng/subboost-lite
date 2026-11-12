@@ -78,7 +78,7 @@ fi
 install -d -m 755 "$base/releases" "$base/runtime"
 release=$(mktemp -d "$base/releases/$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
 chmod 755 "$release"
-tar -C "$source_dir" --exclude='.env' --exclude='.env.*' --exclude='apps/web/data' --exclude='apps/web/.next/cache' \
+tar -C "$source_dir" --exclude='.env' --exclude='.env.*' --exclude='.access-password' --exclude='apps/web/data' --exclude='apps/web/.next/cache' \
   -cf - package.json package-lock.json apps packages scripts deploy node_modules |
   tar --no-same-owner -C "$release" -xf -
 chown -R root:root "$release"
