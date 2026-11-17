@@ -3,8 +3,6 @@ import { EXPORT_TTL_MS, MAX_EXPORT_BYTES, prepareExportFile } from "@/lib/export
 import { GET, HEAD } from "./[id]/[fileName]/route";
 import { POST } from "./route";
 
-vi.mock("@/lib/auth", () => ({ requireSession: () => null }));
-
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
   vi.runOnlyPendingTimers();
@@ -84,7 +82,7 @@ describe("可独立读取的附件下载", () => {
     expect(response.headers.has("Content-Disposition")).toBe(false);
   });
 
-  it("下载扩展不携带页面会话、且 Origin 是扩展或 null 时也能读取已准备的文件", async () => {
+  it("下载扩展不共享页面状态、且 Origin 是扩展或 null 时也能读取已准备的文件", async () => {
     const url = await prepare();
     const variants: Record<string, string>[] = [{}, { Origin: "chrome-extension://download-manager", "Sec-Fetch-Site": "cross-site" }, { Origin: "null" }];
     for (const headers of variants) {

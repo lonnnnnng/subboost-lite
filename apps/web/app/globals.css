@@ -774,24 +774,7 @@ button:disabled { opacity: 0.42; }
   .base-yaml-preview-content { height: 45dvh; min-height: 140px; flex-shrink: 0; }
 }
 
-/* long: 登录与临时链接沿用工作台的颜色、系统字体和紧凑控件，不改变三栏操作区的可用宽度。 */
-.login-page { min-height: 100dvh; height: 100%; display: grid; grid-template-rows: auto 1fr auto; padding: 28px 36px 20px; overflow-y: auto; }
-.login-brand { display: flex; align-items: center; gap: 12px; font-size: 18px; }
-.login-panel { width: min(100%, 420px); align-self: center; justify-self: center; padding: 32px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
-.login-lock { color: var(--primary); margin-bottom: 18px; }
-.login-panel h1 { margin: 0 0 10px; font-size: 26px; letter-spacing: -0.02em; }
-.login-description { margin: 0 0 28px; color: var(--muted); font-size: 14px; line-height: 1.6; }
-.login-panel label { display: block; margin-bottom: 8px; font-size: 13px; font-weight: 650; }
-.login-password-field { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); border-radius: 7px; padding: 3px 5px 3px 12px; }
-.login-password-field:focus-within { border-color: var(--primary); }
-.login-password-field input { width: 100%; min-width: 0; height: 38px; background: transparent; border: 0; color: var(--ink); outline: 0; font-size: 16px; }
-.login-password-field .icon-button { border: 0; flex-shrink: 0; }
-.login-submit { width: 100%; margin-top: 18px; min-height: 42px; }
-.login-hint { margin: 24px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.login-error { margin: 12px 0; color: #a83237; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
-.login-error a { color: inherit; text-underline-offset: 3px; }
-.login-footer { margin-top: 24px; color: var(--muted); text-align: center; font-size: 12px; }
-.notice a { color: inherit; text-underline-offset: 3px; }
+/* long: 临时链接沿用工作台的颜色、系统字体和紧凑控件，不改变三栏操作区的可用宽度。 */
 .config-link-dialog { width: min(700px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); margin: auto; padding: 24px; overflow-y: auto; color: var(--ink); background: var(--paper); border: 1px solid var(--line-strong); border-radius: 12px; font-family: inherit; }
 .config-link-dialog::backdrop { background: rgba(28, 36, 52, 0.42); }
 .config-link-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -810,12 +793,10 @@ button:disabled { opacity: 0.42; }
 .is-expired .config-link-qr canvas { opacity: 0.15; }
 .config-link-loading { min-height: 280px; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; }
 .config-link-loading[hidden] { display: none; }
-.config-link-dialog > .login-error { color: #a83237; }
+.config-link-dialog > .config-link-error { color: #a83237; overflow-wrap: anywhere; }
 .config-link-dialog > .config-link-note { margin: 0; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12px; }
 .config-link-footer { margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 600px) {
-  .login-page { padding: 20px 18px; }
-  .login-panel { padding: 24px; }
   .config-link-dialog { padding: 18px; }
   .config-link-body { grid-template-columns: 1fr; gap: 12px; }
   .config-link-qr { grid-row: 1; }

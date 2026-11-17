@@ -1,6 +1,5 @@
 import { isAllowedApiRequest } from "@/lib/api-access";
 import { MAX_EXPORT_BYTES, prepareExportFile } from "@/lib/export-files";
-import { requireSession } from "@/lib/auth";
 
 export const runtime = "nodejs";
 // long: 表单百分号编码最多膨胀为原始 UTF-8 的三倍，读取前和读取中都限流，避免大请求占满内存。
@@ -12,8 +11,6 @@ function failure(error: string, status: number): Response {
 
 export async function POST(request: Request): Promise<Response> {
   if (!isAllowedApiRequest(request)) return failure("当前访问地址未获允许或请求不是同源", 403);
-  const denied = requireSession(request);
-  if (denied) return denied;
   if (!/^application\/x-www-form-urlencoded(?:;|$)/i.test(request.headers.get("content-type") || "")) {
     return failure("不支持的导出请求格式", 415);
   }

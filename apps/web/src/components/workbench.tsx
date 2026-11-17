@@ -22,7 +22,6 @@ import {
   Globe2,
   Link2,
   LoaderCircle,
-  LogOut,
   Maximize2,
   Minimize2,
   Network,
@@ -573,7 +572,6 @@ export function Workbench() {
   const [viewingNodeKey, setViewingNodeKey] = useState<string | null>(null);
   const [baseYamlPreviewOpen, setBaseYamlPreviewOpen] = useState(false);
   const [linkSnapshot, setLinkSnapshot] = useState<{ content: string; fileName: string } | null>(null);
-  const [loggingOut, setLoggingOut] = useState(false);
   const [showDecodedReview, setShowDecodedReview] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const sourceInputRef = useRef<HTMLTextAreaElement>(null);
@@ -1410,19 +1408,6 @@ export function Workbench() {
     }
   }
 
-  async function logout() {
-    if (!window.confirm("退出后将清空当前页面配置，确认退出？")) return;
-    setLoggingOut(true);
-    try {
-      const response = await fetch("/api/auth/logout", { method: "POST", signal: AbortSignal.timeout(15_000) });
-      if (!response.ok) throw new Error("退出失败，请重试");
-      window.location.replace("/login");
-    } catch (error) {
-      showNotice("error", error instanceof Error ? error.message : "退出失败，请重试");
-      setLoggingOut(false);
-    }
-  }
-
   return (
     <main className="app-shell" aria-busy={busy || testingNodeKeys.size > 0}>
       <header className="topbar">
@@ -1454,11 +1439,10 @@ export function Workbench() {
             <Download size={17} />
             下载配置
           </button>
-          <button className="icon-button" type="button" onClick={() => void logout()} disabled={loggingOut || busy || testingNodeKeys.size > 0} title="退出登录" aria-label="退出登录">{loggingOut ? <LoaderCircle className="spin" size={17} /> : <LogOut size={17} />}</button>
         </div>
       </header>
 
-      {notice ? <div className={`notice notice-${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"} aria-live={notice.tone === "error" ? "assertive" : "polite"}><span>{notice.tone === "ok" ? <Check size={16} /> : <CircleAlert size={16} />}</span>{notice.text}{notice.text.includes("登录") ? <a href="/login" target="_blank" rel="noreferrer">打开登录页</a> : null}</div> : null}
+      {notice ? <div className={`notice notice-${notice.tone}`} role={notice.tone === "error" ? "alert" : "status"} aria-live={notice.tone === "error" ? "assertive" : "polite"}><span>{notice.tone === "ok" ? <Check size={16} /> : <CircleAlert size={16} />}</span>{notice.text}</div> : null}
       {linkSnapshot ? <ConfigLinkDialog {...linkSnapshot} onClose={() => setLinkSnapshot(null)} /> : null}
 
       <div className="workspace">

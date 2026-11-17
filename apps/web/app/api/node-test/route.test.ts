@@ -2,8 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testNodeBatch } from "@/lib/node-test/server";
 import { POST } from "./route";
 
-vi.mock("@/lib/auth", () => ({ requireSession: () => null }));
-
 vi.mock("@/lib/node-test/server", () => ({
   isNodeTestRequestItem: () => true,
   testNodeBatch: vi.fn(),

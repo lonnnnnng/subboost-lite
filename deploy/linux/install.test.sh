@@ -63,6 +63,7 @@ first=$(readlink -f /opt/subboost-lite/current)
 [[ ! -e "$first/apps/web/.env.local" ]]
 [[ ! -e "$first/scripts/.access-password" ]]
 [[ $(id -u subconvert) != 0 ]]
+! grep -Eq 'SUBCONVERT_PASSWORD_FILE|StateDirectory=' "$first/deploy/linux/subboost-lite.service"
 printf 'PASS: 首次安装、非 root 账号和环境文件排除\n'
 
 printf 'SUBCONVERT_HOST=192.168.1.2\nPORT=8888\nSUBCONVERT_ALLOWED_ORIGINS=http://192.168.1.2:8888\n' > /etc/subboost-lite.env

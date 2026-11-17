@@ -62,7 +62,7 @@ export function ConfigLinkDialog({ content, fileName, onClose }: { content: stri
         </div>
         <div className="config-link-qr"><canvas ref={canvasRef} role="img" aria-label="配置链接二维码" /><span>{remaining ? "在同一网络下扫描导入" : "二维码已过期"}</span></div>
       </div>
-      {error ? <p className="login-error" role="alert">{error}{error.includes("登录") ? <> <a href="/login" target="_blank" rel="noreferrer">重新登录</a></> : null}</p> : null}
+      {error ? <p className="config-link-error" role="alert">{error}</p> : null}
       <p className="config-link-note">链接包含当前配置快照。请勿分享给他人；服务重启后链接会失效。</p>
       <div className="config-link-footer"><button className="secondary-button" type="button" onClick={() => { setPending(true); setError(""); setCopied(false); setGeneration((value) => value + 1); }} disabled={pending}><RotateCcw size={15} />重新生成</button><button className="secondary-button" type="button" onClick={onClose}>完成</button></div>
     </dialog>

@@ -9,7 +9,6 @@ User=subconvert
 Group=subconvert
 WorkingDirectory=/opt/subboost-lite/current
 EnvironmentFile=/etc/subboost-lite.env
-Environment=SUBCONVERT_PASSWORD_FILE=/var/lib/subboost-lite/.access-password
 ExecStart=/opt/subboost-lite/runtime/node /opt/subboost-lite/current/scripts/start.mjs
 Restart=on-failure
 RestartSec=5
@@ -21,8 +20,6 @@ PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
 CacheDirectory=subboost-lite
-StateDirectory=subboost-lite
-StateDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target
