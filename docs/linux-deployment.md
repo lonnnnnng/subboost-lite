@@ -15,6 +15,26 @@
 | 服务 | `subboost-lite.service`，运行账号 `subconvert` |
 | Mihomo 缓存 | `/var/cache/subboost-lite/mihomo` |
 
+### 当前运行实例（2026-11-17 核验）
+
+下面是当前服务器的实时状态，用来区分通用部署步骤与本实例配置：
+
+| 项目 | 已核验值 |
+| --- | --- |
+| 操作系统 / 架构 | Ubuntu 24.04.5 LTS / Linux x64 |
+| 应用版本 | `v1.1.1`，提交 `eede225511157a4c7ea56b1a62cbde7b413775e5` |
+| 当前发布目录 | `/opt/subboost-lite/releases/20261117T145153Z.pE8Mhs` |
+| Node.js | `/opt/subboost-lite/runtime/node`，`v24.15.0` |
+| systemd 状态 | `active (running)`，`NRestarts=0` |
+| 监听地址 | `192.168.1.2:9999`，服务器本机 HTTP 检查返回 `200` |
+| 进程账号 | `subconvert:subconvert`，非 root |
+| 数据库 / 容器 | 不使用数据库；应用由 systemd 直接运行，不使用 Docker |
+| 登录 | 当前版本没有登录密码或登录页面；来源校验不是身份认证 |
+
+本实例的 Node 服务进程直接绑定局域网地址。服务从 `/etc/subboost-lite.env` 读取监听地址、端口、来源白名单和 Mihomo 缓存目录；当前运行配置不包含登录密码项。如果以后加入其他敏感配置，不要把文件内容粘贴到日志或公开工单中。
+
+此主机同时运行 Clash/Mihomo TUN。当前服务已加载 `/etc/systemd/system/subboost-lite.service.d/direct-routing.conf`：systemd 在服务启停时为 `subconvert` UID `996` 管理优先级 `5280` 的主路由规则，并且只在服务的挂载命名空间中使用 `/etc/subboost-lite-resolv.conf`。专用 DNS 是 `223.5.5.5` 和 `119.29.29.29`。这样服务器侧节点测试直连公网，避免宿主机 TUN/Fake-IP 改变测试路径；不会修改宿主机 DNS，也不会改变导出配置中的 DNS。其他服务器必须先检查路由规则，不能直接照搬 `5280`。
+
 Node 不依赖交互式 nvm 初始化。运行时只复制服务器已有的 Linux Node 可执行文件；npm 仅在部署构建时需要。不要上传 macOS 的 node_modules、.next 或二进制缓存。
 
 ## 部署入口
@@ -131,12 +151,13 @@ curl --noproxy '*' -fsS http://192.168.1.2:9999/ -o /dev/null
 ## 验证和边界
 
 - 安装器分支测试可在本机一次性容器中运行：`docker run --rm --network none -e SUBBOOST_DEPLOY_TEST_CONTAINER=1 -v "$PWD:/repo:ro" --entrypoint bash postgres:16 /repo/deploy/linux/install.test.sh`。另加 `-e SUBBOOST_DEPLOY_TEST_FAIL_FIRST=1` 可验证首次激活失败。测试使用模拟的 Node、systemd 和 HTTP 探测，验证预检无写入、配置保留、更新切换及失败恢复；不代替真实 Linux 服务验收，严禁在生产主机直接执行测试脚本。
-- 2026-10-24 已在此服务器验证：Ubuntu 24.04 x64、Node.js 24.15.0、Next.js 16.4.3、Mihomo 1.19.33 compatible；Linux 与 macOS 均通过 488 项 Vitest 测试、3 项启动测试、类型检查、Lint 和生产构建。此次锁文件的 npm audit 为 0 项已知告警，不代表未来不会出现新公告。
+- 2026-11-17 已在服务器重新核验当前部署：`/opt/subboost-lite/current` 指向表中的 `v1.1.1` 发布目录，`REVISION` 与发布提交一致；Node.js 为 `v24.15.0`，systemd 为 `active (running)` 且 `NRestarts=0`，服务器访问 `http://192.168.1.2:9999/` 返回 HTTP `200`。这只验证服务进程和首页可访问，不代替订阅导入、节点测试等功能验收。
+- 2026-10-24 的历史构建记录：Ubuntu 24.04 x64、Node.js 24.15.0、Next.js 16.4.3、Mihomo 1.19.33 compatible；当时 Linux 与 macOS 通过 488 项 Vitest、3 项启动测试、类型检查、Lint 和生产构建。该记录只代表当时的提交，不代表当前版本的测试数量或当前 npm audit 状态。
 - 使用用户提供的真实订阅成功导入 28 个节点，抽取 6 个进行 TCP/代理延迟检测并逐条返回结果；另以 15 秒、10 条下载流、50 MB 上限验证真实下载测速和进度消息。属于部署冒烟验证，不代表订阅内所有节点或所有协议都已验收。
 - 浏览器打开页面，测试来源导入、模板预览、复制/下载、节点测试流式进度。
 - 节点实测由 Linux 服务器执行；不代表浏览器所在电脑的网络性能。
 - TCP 端口通不代表代理协议及固定测试目标一定可用，具体协议边界仍以 README 的检测说明为准。
-- 工作台没有登录；API 通过完整 Host 和 Origin 校验限制同源页面，来源白名单不是身份认证。HTTP 不会加密数据；不要公网转发 `9999`，也不要把来源白名单配成任意通配符。临时配置链接是十分钟 bearer 凭据，持有链接即可读取对应配置。
+- 工作台没有登录；API 会校验 Host 和 Origin 以限制跨站请求，但这不验证访问者身份，也不能阻止同一局域网内的其他用户打开页面。HTTP 不会加密数据；只在可信局域网使用，不要公网转发 `9999`，也不要把来源白名单配成任意通配符。临时配置链接是十分钟 bearer 凭据，持有链接即可读取对应配置。
 - 如果后续使用 HTTPS 反向代理，须保留原始 Host，核对后端的协议/来源判断；不要仅靠伪造转发头放行。NDJSON 接口须关闭响应缓冲并设置足够读超时，本次直连部署不需要反向代理。
 
 参考：[Next.js 自托管](https://nextjs.org/docs/app/guides/self-hosting)、[Mihomo 平台下载](https://wiki.metacubex.one/startup/)。
